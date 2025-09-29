@@ -15,8 +15,8 @@ parser.add_argument(
     '--model_name', 
     type=str, 
     required=False, 
-    default='openai/whisper-small', 
-    help='Huggingface model name to fine-tune. Eg: openai/whisper-small'
+    default='openai/whisper-tiny', 
+    help='Huggingface model name to fine-tune.'
 )
 parser.add_argument(
     '--sampling_rate', 
@@ -26,11 +26,11 @@ parser.add_argument(
     help='Sampling rate of audios.'
 )
 parser.add_argument(
-    '--num_proc', 
+    '--num_cpu_workers', 
     type=int, 
     required=False, 
     default=2, 
-    help='Number of parallel jobs to run. Helps parallelize the dataset prep stage.'
+    help='Number of parallel CPU jobs to run.'
 )
 parser.add_argument(
     '--train_strategy', 
@@ -111,23 +111,11 @@ parser.add_argument(
     default=[], 
     help='List of datasets to be used for evaluation.'
 )
-parser.add_argument(
-    '--dataloader_num_workers', 
-    type=int, 
-    required=False, 
-    default=None, 
-    help='Number of dataloader workers. If not specified, will use psutil.cpu_count(logical=True) for optimal GPU utilization.',
-)
 
 args = parser.parse_args()
 
 if args.train_strategy not in ['steps', 'epoch']:
     raise ValueError('The train strategy should be either steps and epoch.')
-
-# Set dataloader_num_workers for optimal GPU utilization
-if args.dataloader_num_workers is None:
-    args.dataloader_num_workers = psutil.cpu_count(logical=True)
-    print(f"Setting dataloader_num_workers to {args.dataloader_num_workers} for optimal GPU utilization")
 
 print('\n\n+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n\n')
 print('ARGUMENTS OF INTEREST:')
@@ -217,12 +205,12 @@ raw_dataset["train"] = load_custom_dataset('train')
 raw_dataset["eval"] = load_custom_dataset('eval')
 
 raw_dataset = raw_dataset.cast_column("audio", Audio(sampling_rate=args.sampling_rate))
-raw_dataset = raw_dataset.map(prepare_dataset, num_proc=args.num_proc)
+raw_dataset = raw_dataset.map(prepare_dataset, num_proc=args.num_cpu_workers)
 
 raw_dataset = raw_dataset.filter(
     is_in_length_range,
     input_columns=["input_length", "labels"],
-    num_proc=args.num_proc,
+    num_proc=args.num_cpu_workers,
 )
 
 ###############################     DATA COLLATOR AND METRIC DEFINITION     ########################
@@ -303,7 +291,7 @@ if args.train_strategy == 'epoch':
         greater_is_better=False,
         optim="adamw_bnb_8bit",
         resume_from_checkpoint=args.resume_from_ckpt,
-        dataloader_num_workers=args.dataloader_num_workers,
+        dataloader_num_workers=args.num_cpu_workers,
     )
 
 elif args.train_strategy == 'steps':
@@ -331,7 +319,7 @@ elif args.train_strategy == 'steps':
         greater_is_better=False,
         optim="adamw_bnb_8bit",
         resume_from_checkpoint=args.resume_from_ckpt,
-        dataloader_num_workers=args.dataloader_num_workers,
+        dataloader_num_workers=args.num_cpu_workers,
     )
 
 trainer = Seq2SeqTrainer(

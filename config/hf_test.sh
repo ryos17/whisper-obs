@@ -5,7 +5,7 @@ CUDA_VISIBLE_DEVICES=0
 CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} torchrun --nproc_per_node=${ngpu} --master_port=${MASTER_PORT} train/fine-tune_on_hf_dataset.py \
 --model_name openai/whisper-tiny \
 --sampling_rate 16000 \
---num_proc 16 \
+--num_cpu_workers 64 \
 --train_strategy epoch \
 --learning_rate 3.75e-5 \
 --warmup 25 \
@@ -13,7 +13,7 @@ CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} torchrun --nproc_per_node=${ngpu} -
 --eval_batchsize 64 \
 --num_epochs 10 \
 --resume_from_ckpt None \
---output_dir output/hf_test \
+--output_dir output/$(basename "$0" .sh) \
 --train_datasets ahazeemi/librispeech10h ahazeemi/librispeech10h \
 --train_dataset_splits train.10 validation \
 --train_dataset_text_columns text text \
