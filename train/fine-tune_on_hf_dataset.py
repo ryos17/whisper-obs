@@ -18,13 +18,6 @@ parser.add_argument(
     help='Huggingface model name to fine-tune. Eg: openai/whisper-small'
 )
 parser.add_argument(
-    '--language', 
-    type=str, 
-    required=False, 
-    default='Hindi', 
-    help='Language the model is being adapted to in Camel case.'
-)
-parser.add_argument(
     '--sampling_rate', 
     type=int, 
     required=False, 
@@ -110,14 +103,6 @@ parser.add_argument(
     help='List of datasets to be used for training.'
 )
 parser.add_argument(
-    '--train_dataset_configs', 
-    type=str, 
-    nargs='+', 
-    required=True, 
-    default=[], 
-    help="List of training dataset configs. Eg. 'hi' for the Hindi part of Common Voice",
-)
-parser.add_argument(
     '--train_dataset_splits', 
     type=str, 
     nargs='+', 
@@ -140,14 +125,6 @@ parser.add_argument(
     required=True, 
     default=[], 
     help='List of datasets to be used for evaluation.'
-)
-parser.add_argument(
-    '--eval_dataset_configs', 
-    type=str, 
-    nargs='+', 
-    required=True, 
-    default=[], 
-    help="List of evaluation dataset configs. Eg. 'hi_in' for the Hindi part of Google Fleurs",
 )
 parser.add_argument(
     '--eval_dataset_splits', 
@@ -175,11 +152,6 @@ if len(args.train_datasets) == 0:
     raise ValueError('No train dataset has been passed')
 if len(args.eval_datasets) == 0:
     raise ValueError('No evaluation dataset has been passed')
-
-if len(args.train_datasets) != len(args.train_dataset_configs):
-    raise ValueError(f"Ensure that the number of entries in the list of train_datasets equals the number of entries in the list of train_dataset_configs. Received {len(args.train_datasets)} entries for train_datasets and {len(args.train_dataset_configs)} for train_dataset_configs.")
-if len(args.eval_datasets) != len(args.eval_dataset_configs):
-    raise ValueError(f"Ensure that the number of entries in the list of eval_datasets equals the number of entries in the list of eval_dataset_configs. Received {len(args.eval_datasets)} entries for eval_datasets and {len(args.eval_dataset_configs)} for eval_dataset_configs.")
 
 if len(args.train_datasets) != len(args.train_dataset_splits):
     raise ValueError(f"Ensure that the number of entries in the list of train_datasets equals the number of entries in the list of train_dataset_splits. Received {len(args.train_datasets)} entries for train_datasets and {len(args.train_dataset_splits)} for train_dataset_splits.")
@@ -209,8 +181,8 @@ normalizer = BasicTextNormalizer()
 #############################       MODEL LOADING       #####################################
 
 feature_extractor = WhisperFeatureExtractor.from_pretrained(args.model_name)
-tokenizer = WhisperTokenizer.from_pretrained(args.model_name, language=args.language, task="transcribe")
-processor = WhisperProcessor.from_pretrained(args.model_name, language=args.language, task="transcribe")
+tokenizer = WhisperTokenizer.from_pretrained(args.model_name, task="transcribe")
+processor = WhisperProcessor.from_pretrained(args.model_name, task="transcribe")
 model = WhisperForConditionalGeneration.from_pretrained(args.model_name)
 
 if model.config.decoder_start_token_id is None:
@@ -237,7 +209,7 @@ def load_all_datasets(split):
     combined_dataset = []
     if split == 'train':
         for i, ds in enumerate(args.train_datasets):
-            dataset = load_dataset(ds, args.train_dataset_configs[i], split=args.train_dataset_splits[i])
+            dataset = load_dataset(ds, split=args.train_dataset_splits[i])
             dataset = dataset.cast_column("audio", Audio(args.sampling_rate))
             if args.train_dataset_text_columns[i] != "sentence":
                 dataset = dataset.rename_column(args.train_dataset_text_columns[i], "sentence")
@@ -245,7 +217,7 @@ def load_all_datasets(split):
             combined_dataset.append(dataset)
     elif split == 'eval':
         for i, ds in enumerate(args.eval_datasets):
-            dataset = load_dataset(ds, args.eval_dataset_configs[i], split=args.eval_dataset_splits[i])
+            dataset = load_dataset(ds, split=args.eval_dataset_splits[i])
             dataset = dataset.cast_column("audio", Audio(args.sampling_rate))
             if args.eval_dataset_text_columns[i] != "sentence":
                 dataset = dataset.rename_column(args.eval_dataset_text_columns[i], "sentence")
@@ -372,7 +344,7 @@ if args.train_strategy == 'epoch':
         load_best_model_at_end=True,
         metric_for_best_model="wer",
         greater_is_better=False,
-        optim="adamw_bnb_8bit",
+        optim="adamw_torch",
         resume_from_checkpoint=args.resume_from_ckpt,
     )
 
@@ -399,7 +371,7 @@ elif args.train_strategy == 'steps':
         load_best_model_at_end=True,
         metric_for_best_model="wer",
         greater_is_better=False,
-        optim="adamw_bnb_8bit",
+        optim="adamw_torch",
         resume_from_checkpoint=args.resume_from_ckpt,
     )
 
