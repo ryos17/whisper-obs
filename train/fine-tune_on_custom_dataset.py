@@ -18,13 +18,6 @@ parser.add_argument(
     help='Huggingface model name to fine-tune. Eg: openai/whisper-small'
 )
 parser.add_argument(
-    '--language', 
-    type=str, 
-    required=False, 
-    default='Hindi', 
-    help='Language the model is being adapted to in Camel case.'
-)
-parser.add_argument(
     '--sampling_rate', 
     type=int, 
     required=False, 
@@ -141,8 +134,8 @@ normalizer = BasicTextNormalizer()
 #############################       MODEL LOADING       #####################################
 
 feature_extractor = WhisperFeatureExtractor.from_pretrained(args.model_name)
-tokenizer = WhisperTokenizer.from_pretrained(args.model_name, language=args.language, task="transcribe")
-processor = WhisperProcessor.from_pretrained(args.model_name, language=args.language, task="transcribe")
+tokenizer = WhisperTokenizer.from_pretrained(args.model_name, task="transcribe")
+processor = WhisperProcessor.from_pretrained(args.model_name, task="transcribe")
 model = WhisperForConditionalGeneration.from_pretrained(args.model_name)
 
 if model.config.decoder_start_token_id is None:

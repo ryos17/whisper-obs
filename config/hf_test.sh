@@ -1,6 +1,7 @@
-ngpu=1  # number of GPUs to perform distributed training on.
+ngpu=1  
+MASTER_PORT=29500
 
-torchrun --nproc_per_node=${ngpu} train/fine-tune_on_hf_dataset.py \
+torchrun --nproc_per_node=${ngpu} --master_port=${MASTER_PORT} train/fine-tune_on_hf_dataset.py \
 --model_name openai/whisper-tiny \
 --sampling_rate 16000 \
 --num_proc 16 \
