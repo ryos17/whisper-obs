@@ -1,6 +1,7 @@
 import torch
 import argparse
 import evaluate
+import psutil
 from dataclasses import dataclass
 from typing import Any, Dict, List, Union
 from datasets import DatasetDict, Audio, load_from_disk, concatenate_datasets
@@ -110,11 +111,23 @@ parser.add_argument(
     default=[], 
     help='List of datasets to be used for evaluation.'
 )
+parser.add_argument(
+    '--dataloader_num_workers', 
+    type=int, 
+    required=False, 
+    default=None, 
+    help='Number of dataloader workers. If not specified, will use psutil.cpu_count(logical=True) for optimal GPU utilization.',
+)
 
 args = parser.parse_args()
 
 if args.train_strategy not in ['steps', 'epoch']:
     raise ValueError('The train strategy should be either steps and epoch.')
+
+# Set dataloader_num_workers for optimal GPU utilization
+if args.dataloader_num_workers is None:
+    args.dataloader_num_workers = psutil.cpu_count(logical=True)
+    print(f"Setting dataloader_num_workers to {args.dataloader_num_workers} for optimal GPU utilization")
 
 print('\n\n+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n\n')
 print('ARGUMENTS OF INTEREST:')
@@ -290,6 +303,7 @@ if args.train_strategy == 'epoch':
         greater_is_better=False,
         optim="adamw_bnb_8bit",
         resume_from_checkpoint=args.resume_from_ckpt,
+        dataloader_num_workers=args.dataloader_num_workers,
     )
 
 elif args.train_strategy == 'steps':
@@ -317,6 +331,7 @@ elif args.train_strategy == 'steps':
         greater_is_better=False,
         optim="adamw_bnb_8bit",
         resume_from_checkpoint=args.resume_from_ckpt,
+        dataloader_num_workers=args.dataloader_num_workers,
     )
 
 trainer = Seq2SeqTrainer(
