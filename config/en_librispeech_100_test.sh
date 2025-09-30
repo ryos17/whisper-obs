@@ -14,5 +14,5 @@ CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} torchrun --nproc_per_node=${ngpu} -
 --num_epochs 10 \
 --resume_from_ckpt None \
 --output_dir output/$(basename "$0" .sh) \
---train_datasets librispeech/train-clean-100 librispeech/dev-clean \
---eval_datasets librispeech/test-clean \
+--train_datasets librispeech/train-clean-100 \
+--eval_datasets librispeech/dev-clean \
