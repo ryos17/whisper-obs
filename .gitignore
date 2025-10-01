@@ -1,3 +1,5 @@
-env_whisper-finetune/
-output/*
-librispeech/*
+env_whisper-finetune
+output
+output_eval
+librispeech
+temp

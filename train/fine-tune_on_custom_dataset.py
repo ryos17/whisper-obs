@@ -82,6 +82,13 @@ parser.add_argument(
     help='Number of steps to train for.'
 )
 parser.add_argument(
+    '--eval_save_steps', 
+    type=int, 
+    required=False, 
+    default=1000, 
+    help='Number of steps to save and evaluatethe evaluation results.'
+)
+parser.add_argument(
     '--resume_from_ckpt', 
     type=str, 
     required=False, 
@@ -275,6 +282,7 @@ if args.train_strategy == 'epoch':
         gradient_accumulation_steps=1,
         learning_rate=args.learning_rate,
         warmup_steps=args.warmup,
+        lr_scheduler_type="cosine",
         gradient_checkpointing=gradient_checkpointing,
         fp16=True,
         evaluation_strategy="epoch",
@@ -301,12 +309,13 @@ elif args.train_strategy == 'steps':
         gradient_accumulation_steps=1,
         learning_rate=args.learning_rate,
         warmup_steps=args.warmup,
+        lr_scheduler_type="cosine",
         gradient_checkpointing=gradient_checkpointing,
         fp16=True,
         evaluation_strategy="steps",
-        eval_steps=1000,
+        eval_steps=args.eval_save_steps,
         save_strategy="steps",
-        save_steps=1000,
+        save_steps=args.eval_save_steps,
         max_steps=args.num_steps,
         save_total_limit=10,
         per_device_eval_batch_size=args.eval_batchsize,

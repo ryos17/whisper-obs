@@ -77,9 +77,7 @@ def main(args):
     )
 
     whisper_asr.model.config.forced_decoder_ids = (
-        whisper_asr.tokenizer.get_decoder_prompt_ids(
-            language=args.language, task="transcribe"
-        )
+        whisper_asr.tokenizer.get_decoder_prompt_ids(task="transcribe")
     )
 
     os.system(f"mkdir {args.output_dir}")
@@ -96,6 +94,7 @@ def main(args):
         norm_predictions = []
         norm_references = []
 
+        print(f"\n\nTotal iterations: {len(dataset)}\n\n")
         for out in tqdm(whisper_asr(data(dataset), batch_size=args.batch_size), desc='Decode Progress'):
             predictions.append(out["text"])
             references.append(out["reference"][0])
@@ -166,15 +165,8 @@ if __name__ == "__main__":
         "--temp_ckpt_folder",
         type=str,
         required=False,
-        default="temp_dir",
+        default="temp",
         help="Path to create a temporary folder containing the model and related files needed for inference",
-    )
-    parser.add_argument(
-        "--language",
-        type=str,
-        required=False,
-        default="hi",
-        help="Two letter language code for the transcription language, e.g. use 'hi' for Hindi. This helps initialize the tokenizer.",
     )
     parser.add_argument(
         "--eval_datasets", 
