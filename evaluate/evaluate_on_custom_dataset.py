@@ -4,7 +4,7 @@ import evaluate
 from tqdm import tqdm
 from pathlib import Path
 from transformers import pipeline
-from datasets import Audio, load_from_disk
+from datasets import Audio, load_from_disk, disable_caching
 from transformers.models.whisper.english_normalizer import BasicTextNormalizer
 
 wer_metric = evaluate.load("wer")
@@ -60,6 +60,8 @@ def data(dataset):
 
 
 def main(args):
+    # Disable HF Datasets caching globally to avoid writing cache/tmp files next to dataset dirs
+    disable_caching()
     if args.is_public_repo == False:
         os.system(f"mkdir -p {args.temp_ckpt_folder}")
         ckpt_dir_parent = str(Path(args.ckpt_dir).parent)
@@ -86,8 +88,14 @@ def main(args):
         dataset = load_from_disk(dset)
         text_column_name = get_text_column_names(dataset.column_names)
         dataset = dataset.cast_column("audio", Audio(sampling_rate=16000))
-        dataset = dataset.map(normalise, num_proc=2)
-        dataset = dataset.filter(is_target_text_in_range, input_columns=[text_column_name], num_proc=2)
+        dataset = dataset.map(normalise, num_proc=2, load_from_cache_file=False, keep_in_memory=True)
+        dataset = dataset.filter(
+            is_target_text_in_range,
+            input_columns=[text_column_name],
+            num_proc=2,
+            load_from_cache_file=False,
+            keep_in_memory=True,
+        )
 
         predictions = []
         references = []

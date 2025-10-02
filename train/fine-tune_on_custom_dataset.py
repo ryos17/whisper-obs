@@ -1,10 +1,9 @@
 import torch
 import argparse
 import evaluate
-import psutil
 from dataclasses import dataclass
 from typing import Any, Dict, List, Union
-from datasets import DatasetDict, Audio, load_from_disk, concatenate_datasets
+from datasets import DatasetDict, Audio, load_from_disk, concatenate_datasets, disable_caching
 from transformers.models.whisper.english_normalizer import BasicTextNormalizer
 from transformers import WhisperFeatureExtractor, WhisperTokenizer, WhisperProcessor, WhisperForConditionalGeneration, Seq2SeqTrainingArguments, Seq2SeqTrainer
 
@@ -17,6 +16,13 @@ parser.add_argument(
     required=False, 
     default='openai/whisper-tiny', 
     help='Huggingface model name to fine-tune.'
+)
+parser.add_argument(
+    '--language', 
+    type=str, 
+    required=False, 
+    default=None, 
+    help='Language of the dataset. Eg. "english" or "telugu" or "hindi" etc.'
 )
 parser.add_argument(
     '--sampling_rate', 
@@ -142,8 +148,13 @@ normalizer = BasicTextNormalizer()
 #############################       MODEL LOADING       #####################################
 
 feature_extractor = WhisperFeatureExtractor.from_pretrained(args.model_name)
-tokenizer = WhisperTokenizer.from_pretrained(args.model_name, task="transcribe")
-processor = WhisperProcessor.from_pretrained(args.model_name, task="transcribe")
+if args.language is not None:
+    tokenizer = WhisperTokenizer.from_pretrained(args.model_name, task="transcribe", language=args.language)
+    processor = WhisperProcessor.from_pretrained(args.model_name, task="transcribe", language=args.language)
+else:
+    tokenizer = WhisperTokenizer.from_pretrained(args.model_name, task="transcribe")
+    processor = WhisperProcessor.from_pretrained(args.model_name, task="transcribe")
+    
 model = WhisperForConditionalGeneration.from_pretrained(args.model_name)
 
 if model.config.decoder_start_token_id is None:
@@ -168,6 +179,8 @@ if gradient_checkpointing:
 
 def load_custom_dataset(split):
     ds = []
+    # Disable HF Datasets caching globally to avoid writing cache/tmp files next to dataset dirs
+    disable_caching()
     if split == 'train':
         for dset in args.train_datasets:
             ds.append(load_from_disk(dset))
@@ -212,12 +225,19 @@ raw_dataset["train"] = load_custom_dataset('train')
 raw_dataset["eval"] = load_custom_dataset('eval')
 
 raw_dataset = raw_dataset.cast_column("audio", Audio(sampling_rate=args.sampling_rate))
-raw_dataset = raw_dataset.map(prepare_dataset, num_proc=args.num_cpu_workers)
+raw_dataset = raw_dataset.map(
+    prepare_dataset,
+    num_proc=args.num_cpu_workers,
+    load_from_cache_file=False,
+    keep_in_memory=True,
+)
 
 raw_dataset = raw_dataset.filter(
     is_in_length_range,
     input_columns=["input_length", "labels"],
     num_proc=args.num_cpu_workers,
+    load_from_cache_file=False,
+    keep_in_memory=True,
 )
 
 ###############################     DATA COLLATOR AND METRIC DEFINITION     ########################

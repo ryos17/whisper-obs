@@ -1,9 +1,10 @@
 ngpu=1
-MASTER_PORT=29503
-CUDA_VISIBLE_DEVICES=3
+MASTER_PORT=29501
+CUDA_VISIBLE_DEVICES=1
 
 CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} torchrun --nproc_per_node=${ngpu} --master_port=${MASTER_PORT} train/fine-tune_on_custom_dataset.py \
---model_name openai/whisper-tiny.en \
+--model_name openai/whisper-tiny \
+--language english \
 --sampling_rate 16000 \
 --num_cpu_workers 16 \
 --train_strategy epoch \
