@@ -72,7 +72,7 @@ torchaudio==2.5.1+cu121
 torchvision==0.20.1+cu121
 tqdm==4.65.0
 transformers==4.28.1
-typing_extensions==4.5.0
+typing_extensions==4.8.0
 tzdata==2023.3
 urllib3==1.26.15
 Werkzeug==2.2.3
