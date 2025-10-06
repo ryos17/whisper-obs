@@ -1,14 +1,7 @@
-"""
-Test script for Whisper OBS pruning.
-
-This script demonstrates how to use the OBS pruning functionality
-with a Whisper model.
-"""
-
 import torch
 import torchaudio
 from transformers import WhisperForConditionalGeneration, WhisperProcessor
-from whisper_obs_pruning import WhisperOBSPruner
+from utils.obs import WhisperOBSPruner
 
 if __name__ == "__main__":   
     print("-" * 60) 
@@ -52,7 +45,7 @@ if __name__ == "__main__":
     # Get layer information
     print("-" * 60)
     print("Pruning model...")
-    sparsity = 0.50
+    sparsity = 0.95
     pruned_weights = pruner.prune_model(sparsity, batch_size=128)
     
     # Test pruned model
