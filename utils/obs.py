@@ -1,7 +1,16 @@
+"""
+OBS Pruning for Whisper Models
+
+This module provides Optimal Brain Surgeon (OBS) pruning for Whisper models
+using diagonal Hessian approximation for efficient unstructured pruning.
+"""
+
 import torch
 import torch.nn as nn
+import torchaudio
+import copy
 from typing import Dict, List, Optional
-from transformers import WhisperForConditionalGeneration
+from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
 
 class WhisperOBSPruner:
@@ -229,7 +238,7 @@ class WhisperOBSPruner:
             target_layers = list(self.obs_data.keys())
         
         pruned_weights = {}
-        
+
         for layer_name in target_layers:
             if layer_name in self.obs_data:
                 pruned_weight = self.prune_layer(layer_name, sparsity, batch_size=batch_size)
@@ -265,3 +274,77 @@ class WhisperOBSPruner:
         self.hooks.clear()
         self.obs_data.clear()
         torch.cuda.empty_cache()
+
+def utility_obs_prune(
+    model: WhisperForConditionalGeneration,
+    processor: WhisperProcessor,
+    audio_path: str,
+    sparsity: float,
+    batch_size: int = 128,
+    debug: bool = False,
+):
+    # Load and processsample audio
+    if debug:
+        print("-" * 60)
+        print("Loading sample audio...")
+    audio, _ = torchaudio.load(audio_path)
+    inputs = processor(audio.squeeze().numpy(), sampling_rate=16000, return_tensors="pt")
+    input_features = inputs.input_features
+    
+    # Create OBS pruner
+    if debug:
+        print("-" * 60)
+        print("Setting up OBS pruner...")
+    pruned_model = copy.deepcopy(model)
+    pruner = WhisperOBSPruner(pruned_model, debug=debug)
+    
+    # Run forward pass to collect data
+    if debug:
+        print("-" * 60)
+        print("Collecting data for Hessian computation...")
+    with torch.no_grad():
+        _ = pruned_model.generate(input_features, max_length=100)
+    
+    # Accumulate Hessian matrices
+    if debug:
+        print("-" * 60)
+        print("Accumulating Hessian matrices...")
+    pruner.accumulate_hessian(max_samples=100, batch_size=batch_size)
+    
+    # Prune the model
+    if debug:
+        print("-" * 60)
+        print("Pruning model...")
+    pruner.prune_model(sparsity, batch_size=batch_size)
+
+    # Test both models
+    if debug:
+        print("-" * 60)
+        print("Running test inference on input audio...")
+        with torch.no_grad():
+            original_output = model.generate(input_features, max_length=100)
+            original_text = processor.batch_decode(original_output, skip_special_tokens=True)[0]
+            pruned_output = pruned_model.generate(input_features, max_length=100)
+            pruned_text = processor.batch_decode(pruned_output, skip_special_tokens=True)[0]
+        print(f"{'Original output:':<20} {original_text}")
+        print(f"{'Pruned output:':<20} {pruned_text}")
+    
+    # Calculate model size reduction
+    if debug:
+        original_params = sum((p != 0).sum().item() for p in model.parameters() if p.requires_grad)
+        pruned_params = sum((p != 0).sum().item() for p in pruned_model.parameters() if p.requires_grad)
+        actual_sparsity = 1 - (pruned_params / original_params)
+        print(f"{'=' * 60}")
+        print(f"{'MODEL STATISTICS':^60}")
+        print(f"{'=' * 60}")
+        print(f"{'Original parameters:':<25} {original_params:,}")
+        print(f"{'Pruned parameters:':<25} {pruned_params:,}")
+        print(f"{'Parameters removed:':<25} {original_params - pruned_params:,}")
+        print(f"{'Sparsity:':<25} {actual_sparsity:.2%}")
+        print(f"{'=' * 60}")
+    
+    # Cleanup
+    if debug:
+        print("-" * 60)
+        print("Cleanup and finishing...")
+    pruner.cleanup()
