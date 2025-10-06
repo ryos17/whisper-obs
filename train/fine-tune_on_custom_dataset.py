@@ -226,14 +226,12 @@ raw_dataset = raw_dataset.cast_column("audio", Audio(sampling_rate=args.sampling
 raw_dataset = raw_dataset.map(
     prepare_dataset,
     num_proc=args.num_cpu_workers,
-    keep_in_memory=True,
 )
 
 raw_dataset = raw_dataset.filter(
     is_in_length_range,
     input_columns=["input_length", "labels"],
     num_proc=args.num_cpu_workers,
-    keep_in_memory=True,
 )
 
 ###############################     DATA COLLATOR AND METRIC DEFINITION     ########################
