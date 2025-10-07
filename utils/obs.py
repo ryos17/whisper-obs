@@ -1,10 +1,3 @@
-"""
-OBS Pruning for Whisper Models
-
-This module provides Optimal Brain Surgeon (OBS) pruning for Whisper models
-using diagonal Hessian approximation for efficient unstructured pruning.
-"""
-
 import torch
 import torch.nn as nn
 import torchaudio
@@ -303,7 +296,10 @@ def utility_obs_prune(
         print("-" * 60)
         print("Collecting data for Hessian computation...")
     with torch.no_grad():
-        _ = pruned_model.generate(input_features, max_length=100)
+        # Move input_features to the same device as the model
+        device = next(pruned_model.parameters()).device
+        input_features = input_features.to(device)
+        _ = pruned_model.generate(input_features, max_length=100, language="english", task="transcribe")
     
     # Accumulate Hessian matrices
     if debug:
@@ -322,29 +318,31 @@ def utility_obs_prune(
         print("-" * 60)
         print("Running test inference on input audio...")
         with torch.no_grad():
-            original_output = model.generate(input_features, max_length=100)
+            original_output = model.generate(input_features, max_length=100, language="english", task="transcribe")
             original_text = processor.batch_decode(original_output, skip_special_tokens=True)[0]
-            pruned_output = pruned_model.generate(input_features, max_length=100)
+            pruned_output = pruned_model.generate(input_features, max_length=100, language="english", task="transcribe")
             pruned_text = processor.batch_decode(pruned_output, skip_special_tokens=True)[0]
         print(f"{'Original output:':<20} {original_text}")
         print(f"{'Pruned output:':<20} {pruned_text}")
     
     # Calculate model size reduction
-    if debug:
-        original_params = sum((p != 0).sum().item() for p in model.parameters() if p.requires_grad)
-        pruned_params = sum((p != 0).sum().item() for p in pruned_model.parameters() if p.requires_grad)
-        actual_sparsity = 1 - (pruned_params / original_params)
-        print(f"{'=' * 60}")
-        print(f"{'MODEL STATISTICS':^60}")
-        print(f"{'=' * 60}")
-        print(f"{'Original parameters:':<25} {original_params:,}")
-        print(f"{'Pruned parameters:':<25} {pruned_params:,}")
-        print(f"{'Parameters removed:':<25} {original_params - pruned_params:,}")
-        print(f"{'Sparsity:':<25} {actual_sparsity:.2%}")
-        print(f"{'=' * 60}")
+    original_params = sum((p != 0).sum().item() for p in model.parameters())
+    pruned_params = sum((p != 0).sum().item() for p in pruned_model.parameters())
+    actual_sparsity = 1 - (pruned_params / original_params)
+    print(f"{'=' * 60}")
+    print(f"{'MODEL STATISTICS':^60}")
+    print(f"{'=' * 60}")
+    print(f"{'Original parameters:':<25} {original_params:,}")
+    print(f"{'Processed parameters:':<25} {pruned_params:,}")
+    print(f"{'Parameters removed:':<25} {original_params - pruned_params:,}")
+    print(f"{'Sparsity:':<25} {actual_sparsity:.2%}")
+    print(f"{'=' * 60}")
     
     # Cleanup
     if debug:
         print("-" * 60)
         print("Cleanup and finishing...")
     pruner.cleanup()
+    
+    # Return the pruned model
+    return pruned_model
