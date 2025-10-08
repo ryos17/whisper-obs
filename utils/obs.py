@@ -2,6 +2,9 @@ import torch
 import torch.nn as nn
 import torchaudio
 import copy
+import evaluate
+from tqdm import tqdm
+from transformers.models.whisper.english_normalizer import BasicTextNormalizer
 from typing import Dict, List, Optional
 from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
@@ -268,14 +271,34 @@ class WhisperOBSPruner:
         self.obs_data.clear()
         torch.cuda.empty_cache()
 
+
 def utility_obs_prune(
     model: WhisperForConditionalGeneration,
     processor: WhisperProcessor,
     audio_path: str,
     sparsity: float,
     batch_size: int = 128,
+    device: int = 0,
     debug: bool = False,
 ):
+    """
+    Prune a Whisper model using the Optimal Brain Surgeon algorithm.
+    
+    Args:
+        model: Whisper model to prune
+        processor: Whisper processor
+        audio_path: Path to the calibration audio file
+        sparsity: Sparsity level to prune
+        batch_size: Batch size for pruning (default: 128)
+        device: Device to run on (default: 0)
+        debug: Whether to print debug information (default: False)
+    """
+    # Move model to GPU
+    if debug:
+        print("-" * 60)
+        print("Moving model to GPU...")
+    model = model.to(f"cuda:{device}")
+    
     # Load and processsample audio
     if debug:
         print("-" * 60)
@@ -297,8 +320,7 @@ def utility_obs_prune(
         print("Collecting data for Hessian computation...")
     with torch.no_grad():
         # Move input_features to the same device as the model
-        device = next(pruned_model.parameters()).device
-        input_features = input_features.to(device)
+        input_features = input_features.to(f"cuda:{device}")
         _ = pruned_model.generate(input_features, max_length=100, language="english", task="transcribe")
     
     # Accumulate Hessian matrices
@@ -329,14 +351,11 @@ def utility_obs_prune(
     original_params = sum((p != 0).sum().item() for p in model.parameters())
     pruned_params = sum((p != 0).sum().item() for p in pruned_model.parameters())
     actual_sparsity = 1 - (pruned_params / original_params)
-    print(f"{'=' * 60}")
-    print(f"{'MODEL STATISTICS':^60}")
-    print(f"{'=' * 60}")
+    print(f"{'-' * 60}")
     print(f"{'Original parameters:':<25} {original_params:,}")
     print(f"{'Processed parameters:':<25} {pruned_params:,}")
     print(f"{'Parameters removed:':<25} {original_params - pruned_params:,}")
     print(f"{'Sparsity:':<25} {actual_sparsity:.2%}")
-    print(f"{'=' * 60}")
     
     # Cleanup
     if debug:
@@ -346,3 +365,97 @@ def utility_obs_prune(
     
     # Return the pruned model
     return pruned_model
+
+
+def utility_obs_evaluate(model, processor, num_samples, device=0, debug=False):
+    """
+    Evaluate a model on a dataset and return WER and CER.
+    
+    Args:
+        model: Whisper model to evaluate
+        processor: Whisper processor
+        num_samples: Number of samples to evaluate
+        device: Device to run on (default: 0)
+        debug: Whether to print debug information (default: False)
+        
+    Returns:
+        Dictionary with WER and CER metrics
+    """
+    # Move model to GPU
+    if debug:
+        print("-" * 60)
+        print("Moving model to GPU...")
+    model = model.to(f"cuda:{device}")
+
+    # Load metrics
+    wer_metric = evaluate.load("wer")
+    cer_metric = evaluate.load("cer")
+    whisper_norm = BasicTextNormalizer()
+
+    # Load evaluation dataset from custom files
+    if debug:
+        print("-" * 60)
+        print("Loading evaluation dataset...")
+    with open("custom_data/LibriSpeech/test-clean/audio_paths", "r") as f:
+        audio_paths = [line.strip().split(" ", 1)[1] for line in f.readlines()]
+    with open("custom_data/LibriSpeech/test-clean/text", "r") as f:
+        texts = [line.strip().split(" ", 1)[1] for line in f.readlines()]
+    
+    # Take first num_samples samples
+    if debug:
+        print("-" * 60)
+        print(f"Taking first {num_samples} samples...")
+    audio_paths = audio_paths[:num_samples]
+    texts = texts[:num_samples]
+    
+    # Set decoder prompt for English transcription
+    model.config.forced_decoder_ids = (
+        processor.tokenizer.get_decoder_prompt_ids(task="transcribe", language="english")
+    )
+    
+    predictions = []
+    references = []
+    norm_predictions = []
+    norm_references = []
+    
+    # Process dataset item by item
+    for i in tqdm(range(len(audio_paths)), desc=f"Evaluating on {num_samples} samples", leave=False):
+        audio_path = audio_paths[i]
+        ref_text = texts[i]
+        
+        # Load and process audio
+        audio, _ = torchaudio.load(audio_path)
+        audio_array = audio.squeeze().numpy()
+        
+        # Process audio and generate prediction
+        inputs = processor(audio_array, sampling_rate=16000, return_tensors="pt")
+        input_features = inputs.input_features.to(device)
+        
+        # Generate prediction
+        with torch.no_grad():
+            output = model.generate(
+                input_features, 
+                max_length=100,
+                language="english",
+                task="transcribe"
+            )
+            pred_text = processor.batch_decode(output, skip_special_tokens=True)[0]
+    
+        # Store results
+        predictions.append(pred_text)
+        references.append(ref_text)
+        norm_predictions.append(whisper_norm(pred_text))
+        norm_references.append(whisper_norm(ref_text))
+    
+    # Calculate metrics
+    wer = wer_metric.compute(references=references, predictions=predictions)
+    cer = cer_metric.compute(references=references, predictions=predictions)
+    norm_wer = wer_metric.compute(references=norm_references, predictions=norm_predictions)
+    norm_cer = cer_metric.compute(references=norm_references, predictions=norm_predictions)
+    
+    return {
+        "wer": round(100 * wer, 10),
+        "cer": round(100 * cer, 10),
+        "normalized_wer": round(100 * norm_wer, 10),
+        "normalized_cer": round(100 * norm_cer, 10)
+    }
