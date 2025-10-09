@@ -17,16 +17,17 @@ class WhisperOBSPruner:
     Linear layers in Whisper models with minimal performance degradation.
     """
     
-    def __init__(self, model: WhisperForConditionalGeneration, debug: bool = False):
+    def __init__(self, model: WhisperForConditionalGeneration, device: int = 0, debug: bool = False):
         """
         Initialize the OBS pruner for a Whisper model.
         
         Args:
             model: The Whisper model to be pruned
+            device: Device to run on (default: 0)
             debug: Whether to print debug information (default: False)
         """
         self.model = model
-        self.device = next(model.parameters()).device
+        self.device = f"cuda:{device}"
         self.debug = debug
         
         # Store OBS data for each Linear layer
@@ -293,12 +294,6 @@ def utility_obs_prune(
         device: Device to run on (default: 0)
         debug: Whether to print debug information (default: False)
     """
-    # Move model to GPU
-    if debug:
-        print("-" * 60)
-        print("Moving model to GPU...")
-    model = model.to(f"cuda:{device}")
-    
     # Load and processsample audio
     if debug:
         print("-" * 60)
@@ -312,7 +307,7 @@ def utility_obs_prune(
         print("-" * 60)
         print("Setting up OBS pruner...")
     pruned_model = copy.deepcopy(model)
-    pruner = WhisperOBSPruner(pruned_model, debug=debug)
+    pruner = WhisperOBSPruner(pruned_model, device=device, debug=debug)
     
     # Run forward pass to collect data
     if debug:
@@ -348,14 +343,14 @@ def utility_obs_prune(
         print(f"{'Pruned output:':<20} {pruned_text}")
     
     # Calculate model size reduction
-    original_params = sum((p != 0).sum().item() for p in model.parameters())
-    pruned_params = sum((p != 0).sum().item() for p in pruned_model.parameters())
-    actual_sparsity = 1 - (pruned_params / original_params)
-    print(f"{'-' * 60}")
-    print(f"{'Original parameters:':<25} {original_params:,}")
-    print(f"{'Processed parameters:':<25} {pruned_params:,}")
-    print(f"{'Parameters removed:':<25} {original_params - pruned_params:,}")
-    print(f"{'Sparsity:':<25} {actual_sparsity:.2%}")
+    initial_params = sum((p != 0).sum().item() for p in model.parameters())
+    final_params = sum((p != 0).sum().item() for p in pruned_model.parameters())
+    actual_sparsity = 1 - (final_params / initial_params)
+    print("-" * 60)
+    print(f"{'Initial parameters:':<25} {initial_params:,}")
+    print(f"{'Final parameters:':<25} {final_params:,}")
+    print(f"{'Parameters removed:':<25} {initial_params - final_params:,}")
+    print(f"{'Actual sparsity:':<25} {actual_sparsity:.2%}")
     
     # Cleanup
     if debug:
@@ -367,14 +362,14 @@ def utility_obs_prune(
     return pruned_model
 
 
-def utility_obs_evaluate(model, processor, num_samples, device=0, debug=False):
+def utility_obs_evaluate(model, processor, num_samples=None, device=0, debug=False):
     """
     Evaluate a model on a dataset and return WER and CER.
     
     Args:
         model: Whisper model to evaluate
         processor: Whisper processor
-        num_samples: Number of samples to evaluate
+        num_samples: Number of samples to evaluate. None means all samples (default: None)
         device: Device to run on (default: 0)
         debug: Whether to print debug information (default: False)
         
@@ -401,12 +396,10 @@ def utility_obs_evaluate(model, processor, num_samples, device=0, debug=False):
     with open("custom_data/LibriSpeech/test-clean/text", "r") as f:
         texts = [line.strip().split(" ", 1)[1] for line in f.readlines()]
     
-    # Take first num_samples samples
-    if debug:
-        print("-" * 60)
-        print(f"Taking first {num_samples} samples...")
-    audio_paths = audio_paths[:num_samples]
-    texts = texts[:num_samples]
+    # Take first num_samples samples if specified
+    if num_samples is not None:
+        audio_paths = audio_paths[:num_samples]
+        texts = texts[:num_samples]
     
     # Set decoder prompt for English transcription
     model.config.forced_decoder_ids = (

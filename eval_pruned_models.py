@@ -1,6 +1,7 @@
 import json
 from transformers import WhisperForConditionalGeneration, WhisperProcessor
 from utils.obs import utility_obs_prune, utility_obs_evaluate
+from utils.imp import utility_imp_prune, utility_imp_evaluate
 import torch
 
 def main():
@@ -21,14 +22,14 @@ def main():
     print(f"Evaluating {len(sparsities)} sparsity levels...")
     
     for sparsity in sparsities:
-        print(f"{'='*60}")
+        print("=" * 60)
         print(f"{f'Sparsity: {sparsity:.1%}':^60}")
         
         # Prune model
         if sparsity == 0.0:
             pruned_model = model
         else:
-            pruned_model = utility_obs_prune(
+            pruned_model = utility_imp_prune(
                 model=model,
                 processor=processor,
                 audio_path=audio_path,
@@ -37,12 +38,10 @@ def main():
             )
         
         # Evaluate pruned model
-        metrics = utility_obs_evaluate(
+        metrics = utility_imp_evaluate(
             model=pruned_model,
             processor=processor,
-            num_samples=100,
-            device=0,
-            debug=False
+            num_samples=100
         )
 
         # Clean up GPU memory
@@ -62,7 +61,7 @@ def main():
     output_file = "pruned_model_evaluation_results.json"
     print(f"\n{'='*60}")
     print(f"Saving results to {output_file}")
-    print(f"{'='*60}")
+    print("=" * 60)
     
     with open(output_file, 'w') as f:
         json.dump(results, f, indent=2)
@@ -73,7 +72,7 @@ def main():
     # Print summary
     print(f"\n{'='*60}")
     print("SUMMARY")
-    print(f"{'='*60}")
+    print("=" * 60)
     print(f"{'Sparsity':<10} {'WER':<8} {'CER':<8} {'Norm WER':<10} {'Norm CER':<10}")
     print("-" * 60)
     
