@@ -254,13 +254,13 @@ class WhisperOBSPruner:
                 
         return sensitivities
         
-    def compute_mixed_sparsities(self, target_sparsity: float, alpha: float = 0.2) -> Dict[str, float]:
+    def compute_mixed_sparsities(self, target_sparsity: float, alpha: float = 0.03) -> Dict[str, float]:
         """
         Compute mixed sparsity levels for each layer based on their sensitivities.
         
         Args:
             target_sparsity: Target overall sparsity
-            alpha: Hyperparameter controlling the range of sparsity (default: 0.2)
+            alpha: Hyperparameter controlling the range of sparsity (default: 0.03)
             
         Returns:
             Dictionary mapping layer names to sparsity values
