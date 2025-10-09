@@ -78,14 +78,14 @@ def main():
         # Evaluate pruned model
         if args.method == "obs":
             metrics = utility_obs_evaluate(
-                model=model,
+                model=pruned_model,
                 processor=processor,
                 num_samples=args.num_samples,
                 device=args.device,
             )
         else:  
             metrics = utility_imp_evaluate(
-                model=model,
+                model=pruned_model,
                 processor=processor,
                 num_samples=args.num_samples,
                 device=args.device,
