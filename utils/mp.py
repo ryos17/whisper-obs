@@ -9,17 +9,17 @@ from typing import Dict, List, Optional
 from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
 
-class WhisperIMPPruner:
+class WhisperMPPruner:
     """
-    IMP Pruner for Whisper models.
+    MP Pruner for Whisper models.
     
-    This class implements the Iterative Magnitude Pruning algorithm for pruning
+    This class implements the Magnitude Pruning algorithm for pruning
     Linear layers in Whisper models with minimal performance degradation.
     """
     
     def __init__(self, model: WhisperForConditionalGeneration, device: int = 0, debug: bool = False):
         """
-        Initialize the IMP pruner for a Whisper model.
+        Initialize the MP pruner for a Whisper model.
         
         Args:
             model: The Whisper model to be pruned
@@ -177,7 +177,7 @@ class WhisperIMPPruner:
         torch.cuda.empty_cache()
 
 
-def utility_imp_prune(
+def utility_mp_prune(
     model: WhisperForConditionalGeneration,
     processor: WhisperProcessor,
     audio_path: str,
@@ -215,13 +215,13 @@ def utility_imp_prune(
     inputs = processor(audio.squeeze().numpy(), sampling_rate=16000, return_tensors="pt")
     input_features = inputs.input_features
     
-    # Create IMP pruner
+    # Create MP pruner
     if debug:
         print("-" * 60)
-        print("Setting up IMP pruner...")
+        print("Setting up MP pruner...")
     model = model.to(f"cuda:{device}")
     pruned_model = copy.deepcopy(model)
-    pruner = WhisperIMPPruner(pruned_model, device=device, debug=debug)
+    pruner = WhisperMPPruner(pruned_model, device=device, debug=debug)
     
     # Prune the model
     if debug:
@@ -280,7 +280,7 @@ def utility_imp_prune(
     return pruned_model
 
 
-def utility_imp_evaluate(model, processor, num_samples=None, device=0, debug=False):
+def utility_mp_evaluate(model, processor, num_samples=None, device=0, debug=False):
     """
     Evaluate a model on a dataset and return WER and CER.
     

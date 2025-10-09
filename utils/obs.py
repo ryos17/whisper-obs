@@ -3,7 +3,6 @@ import torch.nn as nn
 import torchaudio
 import copy
 import evaluate
-import numpy as np
 from tqdm import tqdm
 from transformers.models.whisper.english_normalizer import BasicTextNormalizer
 from typing import Dict, List, Optional

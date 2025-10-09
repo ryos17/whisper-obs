@@ -2,7 +2,7 @@ import json
 import argparse
 from transformers import WhisperForConditionalGeneration, WhisperProcessor
 from utils.obs import utility_obs_prune, utility_obs_evaluate
-from utils.imp import utility_imp_prune, utility_imp_evaluate
+from utils.mp import utility_mp_prune, utility_mp_evaluate
 import torch
 import copy
 
@@ -15,7 +15,7 @@ def parse_args():
     parser.add_argument("--audio", type=str, 
                         default="/datasets/speech/LibriSpeech/dev-clean/3081/166546/3081-166546-0000.flac",
                         help="Path to audio file for pruning")
-    parser.add_argument("--method", type=str, default="obs", choices=["obs", "imp_local", "imp_global"],
+    parser.add_argument("--method", type=str, default="obs", choices=["obs", "mp_local", "mp_global"],
                         help="Pruning method to use (default: obs)")
     parser.add_argument("--num-samples", type=int, default=100,
                         help="Number of samples for evaluation (default: 100)")
@@ -56,8 +56,8 @@ def main():
                     sparsity=sparsity,
                     device=args.device
                 )
-            elif args.method == "imp_local":
-                pruned_model = utility_imp_prune(
+            elif args.method == "mp_local":
+                pruned_model = utility_mp_prune(
                     model=model,
                     processor=processor,
                     audio_path=args.audio,
@@ -65,8 +65,8 @@ def main():
                     prune_method="local",
                     device=args.device
                 )
-            elif args.method == "imp_global":
-                pruned_model = utility_imp_prune(
+            elif args.method == "mp_global":
+                pruned_model = utility_mp_prune(
                     model=model,
                     processor=processor,
                     audio_path=args.audio,
@@ -84,7 +84,7 @@ def main():
                 device=args.device,
             )
         else:  
-            metrics = utility_imp_evaluate(
+            metrics = utility_mp_evaluate(
                 model=pruned_model,
                 processor=processor,
                 num_samples=args.num_samples,
