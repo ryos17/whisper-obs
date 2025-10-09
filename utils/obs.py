@@ -3,6 +3,7 @@ import torch.nn as nn
 import torchaudio
 import copy
 import evaluate
+import numpy as np
 from tqdm import tqdm
 from transformers.models.whisper.english_normalizer import BasicTextNormalizer
 from typing import Dict, List, Optional
@@ -144,10 +145,168 @@ class WhisperOBSPruner:
         H_inv_diag = 1.0 / H_diag_reg
 
         return H_inv_diag
+        
+    def _compute_gradients(self, layer_name: str, W: torch.Tensor) -> torch.Tensor:
+        """
+        Compute gradients for the improved saliency calculation.
+        
+        Args:
+            layer_name: Name of the layer
+            W: Current weight matrix
+            
+        Returns:
+            Gradient matrix of the same shape as W
+        """
+        data = self.obs_data[layer_name]
+        inputs = torch.cat(data['inputs'], dim=0)
+        
+        # Get original weight (before any pruning)
+        W_original = data['weight']
+        
+        # Compute X^T X for each input dimension with batch processing
+        X_squared = torch.zeros(W.shape[1], device=self.device)
+        for i in range(0, len(inputs), 100): 
+            batch_inputs = inputs[i:i+100]
+            X_squared += torch.sum(batch_inputs ** 2, dim=0)
+        
+        # Compute gradient for each parameter: 2(W - W_original)X^T X
+        X_squared_expanded = X_squared.unsqueeze(0).expand(W.shape[0], -1)
+        gradients = 2 * (W - W_original) * X_squared_expanded
+        
+        return gradients
+        
+    def _estimate_hessian_trace(self, layer_name: str, num_samples: int = 5, batch_size: int = 200, chunk_size: int = 50) -> float:
+        """
+        Estimate the trace of the Hessian matrix for a layer using the Hutchinson algorithm.
+        
+        Args:
+            layer_name: Name of the layer
+            num_samples: Number of random vectors to use for estimation
+            batch_size: Size of input batches for processing
+            chunk_size: Size of row chunks for processing
+            
+        Returns:
+            Estimated trace of the Hessian matrix normalized by parameter count (sensitivity)
+        """
+        # Get layer data collected during forward pass
+        data = self.obs_data[layer_name]
+        inputs = torch.cat(data['inputs'], dim=0)  
+        W = data['weight']  
+        rows, cols = W.shape
+        trace_estimate = 0.0
+        
+        # Hutchinson's method: trace(H) ≈ E[z^T H z] where z is random
+        for s in range(num_samples):
+            # Generate random probe vector
+            z = torch.randn(rows, cols, device=self.device)
+            Hz = torch.zeros_like(z) 
+            
+            # Process in batches to manage memory
+            for i in range(0, len(inputs), batch_size):
+                batch_inputs = inputs[i:i+batch_size]
+                actual_batch_size = batch_inputs.shape[0]
+                
+                # Process in chunks to handle large layers
+                for chunk_start in range(0, rows, chunk_size):
+                    chunk_end = min(chunk_start + chunk_size, rows)
+                    z_chunk = z[chunk_start:chunk_end, :]
+                    
+            
+                    # Hessian-vector product for MSE loss
+                    Xz_all = batch_inputs @ z_chunk.t()  
+                    XTXz = batch_inputs.t() @ Xz_all    
+                    Hz[chunk_start:chunk_end, :] += (2.0 / actual_batch_size) * XTXz.t()
+            
+            # Accumulate z^T * Hz for trace estimation
+            trace_estimate += torch.sum(z * Hz).item()
+        
+        # Average across samples and normalize by parameter count
+        trace_estimate /= num_samples
+        sensitivity = trace_estimate / (rows * cols)
+        
+        return sensitivity
+        
+    def compute_layer_sensitivities(self, num_samples: int = 5) -> Dict[str, float]:
+        """
+        Compute the sensitivity of each layer based on the trace of its Hessian.
+        Optimized version with progress bar and reduced samples.
+        
+        Args:
+            num_samples: Number of random vectors to use for Hessian trace estimation (default: 5)
+            
+        Returns:
+            Dictionary mapping layer names to sensitivity values
+        """
+        sensitivities = {}
+        
+        if self.debug:
+            print("Computing layer sensitivities...")
+        
+        # Get list of layers to process
+        layer_names = list(self.obs_data.keys())
+        
+        for layer_name in layer_names:
+            sensitivity = self._estimate_hessian_trace(layer_name, num_samples)
+            sensitivities[layer_name] = sensitivity
+            
+            if self.debug:
+                print(f"Layer {layer_name}: Sensitivity = {sensitivity:.6f}")
+                
+        return sensitivities
+        
+    def compute_mixed_sparsities(self, target_sparsity: float, alpha: float = 0.2) -> Dict[str, float]:
+        """
+        Compute mixed sparsity levels for each layer based on their sensitivities.
+        
+        Args:
+            target_sparsity: Target overall sparsity
+            alpha: Hyperparameter controlling the range of sparsity (default: 0.2)
+            
+        Returns:
+            Dictionary mapping layer names to sparsity values
+        """
+        # Compute sensitivities
+        sensitivities = self.compute_layer_sensitivities()
+        
+        # Sort layers by sensitivity (higher sensitivity = lower rank = lower sparsity)
+        sorted_layers = sorted(sensitivities.items(), key=lambda x: x[1], reverse=True)
+        layer_names = [layer[0] for layer in sorted_layers]
+        
+        # Compute ranks (0-based)
+        N = len(layer_names)
+        ranks = {layer_names[i]: i for i in range(N)}
+        
+        # Compute sparsity bounds
+        lower_bound = max(0.0, target_sparsity - alpha)
+        higher_bound = min(1.0, target_sparsity + alpha)
+        
+        # Compute sparsity for each layer using arithmetic progression
+        sparsities = {}
+        for layer_name, rank in ranks.items():
+            if N > 1:
+                # Formula: sparsity_i = lower_bound + rank_i * (2*alpha)/(N-1)
+                sparsity = lower_bound + rank * (2 * alpha) / (N - 1)
+            else:
+                sparsity = target_sparsity
+                
+            sparsities[layer_name] = sparsity
+            
+        if self.debug:
+            print(f"\nMixed sparsity assignment (target: {target_sparsity:.2f}, range: [{lower_bound:.2f}, {higher_bound:.2f}]):")
+            for layer_name in layer_names:
+                print(f"  {layer_name}: {sparsities[layer_name]:.4f} (sensitivity: {sensitivities[layer_name]:.6f})")
+                
+            # Verify overall sparsity
+            total_params = sum(self.obs_data[name]['weight'].numel() for name in layer_names)
+            pruned_params = sum(int(self.obs_data[name]['weight'].numel() * sparsities[name]) for name in layer_names)
+            overall_sparsity = pruned_params / total_params
+            print(f"Overall effective sparsity: {overall_sparsity:.4f} (target: {target_sparsity:.4f})")
+            
+        return sparsities
     
     def prune_layer(self, layer_name: str, sparsity: float, rel_damp: float = 1e-4, min_value: float = 1e-8, batch_size: int = 32) -> torch.Tensor:
         """
-        Prune a single Linear layer using diagonal OBS algorithm.
+        Prune a single Linear layer using improved OBS algorithm.
         
         Args:
             layer_name: Name of the layer to prune
@@ -161,20 +320,23 @@ class WhisperOBSPruner:
         """    
         data = self.obs_data[layer_name]
         H_diag = data['hessian_diag']
-        W = data['weight']
+        W = data['weight'].clone() 
         
         # Invert diagonal Hessian 
         H_inv_diag = self._invert_hessian_diag(H_diag, rel_damp=rel_damp, min_value=min_value)
         
+        # Compute gradients for improved saliency
+        gradients = self._compute_gradients(layer_name, W)
+        
         # Initialize pruning
         rows, cols = W.shape
-        target_zeros = int(sparsity * cols)
+        target_zeros = min(int(sparsity * cols), cols) 
         
         # Create mask for already pruned weights
         mask = torch.zeros_like(W, dtype=torch.bool, device=self.device)
         
-        # Initialize loss tracking
-        losses = torch.zeros((rows, cols + 1), device=self.device)
+        # Initialize loss tracking 
+        losses = torch.zeros((rows, target_zeros + 1), device=self.device)
         
         # Process rows in parallel batches
         for i1 in range(0, rows, batch_size):
@@ -190,8 +352,13 @@ class WhisperOBSPruner:
             
             # Prune weights iteratively
             for zeros in range(1, target_zeros + 1):
-                # Compute saliency scores: w^2 / H_inv_diag
-                saliency_scores = (w ** 2) / H_inv_diag.unsqueeze(0)  
+                # Get gradient slice for current batch
+                g = gradients[i1:i2, :]
+                
+                # Saliency: |w*g| + (w^2 / H_inv_diag)
+                saliency_scores = torch.abs(w * g) + (w ** 2) / H_inv_diag.unsqueeze(0)
+                
+                # Set pruned weights to have infinite saliency (to avoid selecting them again)
                 saliency_scores[m] = float('inf')  
                 
                 # Find smallest saliency score in each row
@@ -220,14 +387,15 @@ class WhisperOBSPruner:
 
         return W
     
-    def prune_model(self, sparsity: float, target_layers: Optional[List[str]] = None, batch_size: int = 32) -> Dict[str, torch.Tensor]:
+    def prune_model(self, sparsity: float, target_layers: Optional[List[str]] = None, batch_size: int = 32, alpha: float = 0.03) -> Dict[str, torch.Tensor]:
         """
-        Prune multiple layers in the model.
+        Prune multiple layers in the model using mixed sparsity pruning.
         
         Args:
             sparsity: Target sparsity for all layers
             target_layers: List of layer names to prune. If None, prunes all Linear layers.
             batch_size: Batch size for pruning (default: 32)
+            alpha: Hyperparameter controlling the range of sparsity for mixed pruning (default: 0.03)
         Returns:
             Dictionary mapping layer names to pruned weight matrices
         """
@@ -235,10 +403,18 @@ class WhisperOBSPruner:
             target_layers = list(self.obs_data.keys())
         
         pruned_weights = {}
+        
+        layer_sparsities = self.compute_mixed_sparsities(sparsity, alpha)
 
+        # Prune each layer with its assigned sparsity
         for layer_name in target_layers:
             if layer_name in self.obs_data:
-                pruned_weight = self.prune_layer(layer_name, sparsity, batch_size=batch_size)
+                layer_sparsity = layer_sparsities[layer_name]
+                
+                if self.debug:
+                    print(f"Pruning {layer_name} with sparsity {layer_sparsity:.4f}")
+                    
+                pruned_weight = self.prune_layer(layer_name, layer_sparsity, batch_size=batch_size)
                 pruned_weights[layer_name] = pruned_weight
                 
                 # Update the actual layer weights
@@ -281,6 +457,7 @@ def utility_obs_prune(
     batch_size: int = 128,
     device: int = 0,
     debug: bool = False,
+    alpha: float = 0.03,
 ):
     """
     Prune a Whisper model using the Optimal Brain Surgeon algorithm.
@@ -293,6 +470,7 @@ def utility_obs_prune(
         batch_size: Batch size for pruning (default: 128)
         device: Device to run on (default: 0)
         debug: Whether to print debug information (default: False)
+        alpha: Hyperparameter controlling the range of sparsity for mixed pruning (default: 0.03)
     """
     # Load and processsample audio
     if debug:
@@ -306,6 +484,7 @@ def utility_obs_prune(
     if debug:
         print("-" * 60)
         print("Setting up OBS pruner...")
+    model = model.to(f"cuda:{device}")
     pruned_model = copy.deepcopy(model)
     pruner = WhisperOBSPruner(pruned_model, device=device, debug=debug)
     
@@ -328,7 +507,7 @@ def utility_obs_prune(
     if debug:
         print("-" * 60)
         print("Pruning model...")
-    pruner.prune_model(sparsity, batch_size=batch_size)
+    pruner.prune_model(sparsity, batch_size=batch_size, alpha=alpha)
 
     # Test both models
     if debug:

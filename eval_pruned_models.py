@@ -11,7 +11,7 @@ def main():
     processor = WhisperProcessor.from_pretrained("openai/whisper-tiny")
 
     # Define sparsity levels to test
-    sparsities = [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
+    sparsities = [0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
     
     # Results dictionary
     results = {}
@@ -29,16 +29,16 @@ def main():
         if sparsity == 0.0:
             pruned_model = model
         else:
-            pruned_model = utility_imp_prune(
+            pruned_model = utility_obs_prune(
                 model=model,
                 processor=processor,
                 audio_path=audio_path,
                 sparsity=sparsity,
-                debug=False  
+                alpha=0.03
             )
         
         # Evaluate pruned model
-        metrics = utility_imp_evaluate(
+        metrics = utility_obs_evaluate(
             model=pruned_model,
             processor=processor,
             num_samples=100
@@ -58,7 +58,7 @@ def main():
         print(f"{'Normalized CER:':<25} {metrics['normalized_cer']:.2f}%")
 
     # Save results to JSON
-    output_file = "pruned_model_evaluation_results.json"
+    output_file = "obs_new.json"
     print(f"\n{'='*60}")
     print(f"Saving results to {output_file}")
     print("=" * 60)

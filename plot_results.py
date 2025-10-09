@@ -1,45 +1,87 @@
-#!/usr/bin/env python3
-
 import json
 import matplotlib.pyplot as plt
+import os
 
-# Load results
-with open('pruned_model_evaluation_results.json', 'r') as f:
-    results = json.load(f)
-
-# Extract data
-sparsities = []
-normalized_wers = []
-
-for sparsity_str, metrics in results.items():
-    sparsity = float(sparsity_str) * 100  # Convert to percentage
-    norm_wer = min(metrics['normalized_wer'], 100)  # Cap at 100
-    
-    sparsities.append(sparsity)
-    normalized_wers.append(norm_wer)
+# Define file paths and corresponding model names and colors
+model_files = {
+    'model_compare_result/imp_global.json': {'name': 'IMP Global', 'color': 'blue', 'marker': 'o'},
+    'model_compare_result/imp_local.json': {'name': 'IMP Local', 'color': 'green', 'marker': 's'},
+    'model_compare_result/obs_old.json': {'name': 'OBS Standard', 'color': 'red', 'marker': '^'},
+    'model_compare_result/obs_new.json': {'name': 'OBS Improved', 'color': 'purple', 'marker': 'd'}
+}
 
 # Create plot
-plt.figure(figsize=(10, 6))
-plt.plot(sparsities, normalized_wers, 'bo-', linewidth=2, markersize=6)
+plt.figure(figsize=(12, 8))
+
+# Process each model's data
+for file_path, model_info in model_files.items():
+    # Skip if file doesn't exist yet
+    if not os.path.exists(file_path):
+        print(f"Warning: {file_path} does not exist yet. Skipping.")
+        continue
+    
+    try:
+        # Load results
+        with open(file_path, 'r') as f:
+            results = json.load(f)
+        
+        # Extract data
+        sparsities = []
+        normalized_wers = []
+        
+        for sparsity_str, metrics in results.items():
+            sparsity = float(sparsity_str) * 100  # Convert to percentage
+            norm_wer = min(metrics['normalized_wer'], 100)  # Cap at 100
+            
+            sparsities.append(sparsity)
+            normalized_wers.append(norm_wer)
+        
+        # Sort by sparsity to ensure the line is drawn correctly
+        sorted_data = sorted(zip(sparsities, normalized_wers))
+        sparsities = [x for x, y in sorted_data]
+        normalized_wers = [y for x, y in sorted_data]
+        
+        # Plot this model's data
+        plt.plot(
+            sparsities, 
+            normalized_wers, 
+            color=model_info['color'],
+            marker=model_info['marker'],
+            linestyle='-', 
+            linewidth=2, 
+            markersize=8,
+            label=model_info['name']
+        )
+        
+        print(f"Plotted data from {file_path}")
+    
+    except Exception as e:
+        print(f"Error processing {file_path}: {e}")
 
 # Set labels and title with larger font sizes
-plt.xlabel('Sparsity (%)', fontsize=14)
-plt.ylabel('Normalized WER (%)', fontsize=14)
-plt.title('Sparsity vs Normalized WER for openai/whisper-tiny', fontsize=16)
+plt.xlabel('Sparsity (%)', fontsize=16)
+plt.ylabel('Normalized WER (%)', fontsize=16)
+plt.title('Pruning Method Comparison for openai/whisper-tiny', fontsize=18)
 
 # Set x-axis to show every 10% and set limits to hit edges
-plt.xticks(range(0, 101, 10), fontsize=12)
+plt.xticks(range(0, 101, 10), fontsize=14)
 plt.xlim(0, 100)
 
-# Set y-axis limits
+# Set y-axis limits with some padding
 plt.ylim(0, 100)
+plt.yticks(fontsize=14)
 
 # Add grid
 plt.grid(True, alpha=0.3)
 
+# Add legend
+plt.legend(fontsize=14, loc='best')
+
 # Save plot
 plt.tight_layout()
-plt.savefig('sparsity_vs_normalized_wer.png', dpi=300, bbox_inches='tight')
+plt.savefig('pruning_method_comparison.png', dpi=300, bbox_inches='tight')
+
+# Show plot
 plt.show()
 
-print("Plot saved as 'sparsity_vs_normalized_wer.png'")
+print("Plot saved as 'pruning_method_comparison.png'")

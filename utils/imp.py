@@ -5,7 +5,7 @@ import copy
 import evaluate
 from tqdm import tqdm
 from transformers.models.whisper.english_normalizer import BasicTextNormalizer
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional
 from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
 
@@ -219,6 +219,7 @@ def utility_imp_prune(
     if debug:
         print("-" * 60)
         print("Setting up IMP pruner...")
+    model = model.to(f"cuda:{device}")
     pruned_model = copy.deepcopy(model)
     pruner = WhisperIMPPruner(pruned_model, device=device, debug=debug)
     
