@@ -1,173 +1,205 @@
-# Whisper OBS Pruning
+# Whisper Pruning
 
-This module provides a simplified implementation of OBS (Optimal Brain Surgeon) pruning specifically designed for Whisper models. The implementation focuses on unstructured pruning of Linear layers using second-order information.
+This repository implements multiple pruning techniques for Whisper speech recognition models, including Optimal Brain Surgeon (OBS) and Iterative Magnitude Pruning (IMP).
 
 ## Features
 
-- **Pure OBS Algorithm**: Implements the original OBS algorithm without quantization or structured pruning
-- **Diagonal Approximation**: Uses diagonal Hessian approximation for massive speedup (100x+ faster)
-- **Whisper-Specific**: Optimized for Whisper model architecture with 65 Linear layers
-- **Automatic Layer Detection**: Automatically identifies and prunes Linear layers
-- **Hessian Accumulation**: Collects second-order information during forward passes
-- **Flexible Pruning**: Supports pruning specific layers or all Linear layers
-- **Memory Efficient**: Processes layers in parallel batches
+- **Multiple Pruning Techniques**: 
+  - OBS (Optimal Brain Surgeon) with diagonal approximation
+  - IMP (Iterative Magnitude Pruning) with local and global variants
+  - Enhanced OBS with improved saliency using first-order information
+  - Mixed sparsity pruning based on layer sensitivity
+
+- **Comprehensive Evaluation**: Tools to evaluate pruned models on speech recognition tasks
+  - WER (Word Error Rate) and CER (Character Error Rate) metrics
+  - Normalized metrics using WhisperNormalizer
+  - Evaluation on LibriSpeech dataset
+
+- **GPU Support**: Multi-GPU support with configurable device selection
+  - Compatible with CUDA devices
+  - Memory-efficient implementation
+
+- **Visualization**: Tools to plot and compare results from different pruning methods
 
 ## Key Components
 
-### WhisperOBSPruner Class
+### Pruning Classes
 
-The main class for OBS pruning of Whisper models:
-
-```python
-from whisper_obs_pruning import WhisperOBSPruner
-
-# Initialize pruner
-pruner = WhisperOBSPruner(model, rel_damp=1e-4)
-
-# Collect data and accumulate Hessian matrices
-pruner.accumulate_hessian(max_samples=1000)
-
-# Prune specific layers
-pruned_weights = pruner.prune_model(sparsity=0.3, target_layers=['model.encoder.layers.0.fc1'])
-```
-
-### Convenience Function
-
-For simple use cases:
+#### WhisperOBSPruner
 
 ```python
-from whisper_obs_pruning import prune_whisper_model
+from utils.obs import WhisperOBSPruner, utility_obs_prune
 
-# Prune entire model
-pruned_model = prune_whisper_model(
+# Initialize pruner with device selection
+pruner = WhisperOBSPruner(model, device=0, debug=True)
+
+# Prune model with mixed sparsity
+pruned_model = utility_obs_prune(
     model=model,
-    sparsity=0.3,  # Remove 30% of weights
-    max_samples=1000
+    processor=processor,
+    audio_path=audio_path,
+    sparsity=0.3,
+    device=0,
+    alpha=0.1  # Controls mixed sparsity range
 )
 ```
 
-## Algorithm Details
+#### WhisperIMPPruner
 
-### OBS (Optimal Brain Surgeon) Algorithm with Diagonal Approximation
+```python
+from utils.imp import WhisperIMPPruner, utility_imp_prune
 
-1. **Diagonal Hessian Accumulation**: Collects only diagonal elements (much faster!)
-   ```python
-   H_diag += (2/n) * sum(X^2, dim=0)  # Only diagonal elements
-   ```
+# Prune model using global or local IMP
+pruned_model = utility_imp_prune(
+    model=model,
+    processor=processor,
+    audio_path=audio_path,
+    sparsity=0.3,
+    device=0,
+    prune_method="global"  # or "local"
+)
+```
 
-2. **Weight Importance Scoring**: Uses diagonal Hessian to compute importance
-   ```python
-   scores = w^2 / H_inv_diag  # Much simpler with diagonal approximation
-   ```
+## Advanced Pruning Features
 
-3. **Simplified Pruning**: Removes least important weights (no matrix operations needed)
-   ```python
-   w[j] = 0  # Simply set to zero with diagonal approximation
-   ```
+### Improved Saliency with First-order Information
 
-### Key Features
+OBS implementation includes an enhanced saliency metric that combines first and second-order information:
 
-- **Diagonal Approximation**: 100x+ speedup by using only diagonal Hessian elements
-- **Memory Efficient**: O(n) memory instead of O(n²) for full Hessian
-- **Numerical Stability**: Simple regularization for diagonal elements
-- **Parallel Processing**: Processes multiple weight rows simultaneously
-- **Dead Neuron Handling**: Properly handles zero-variance inputs
+```
+improved_saliency = |w*g| + (w² / H_inv_diag)
+```
+
+Where:
+- w is the weight value
+- g is the gradient of the loss with respect to the weight
+- H_inv_diag is the inverted diagonal Hessian
+
+### Mixed Sparsity Pruning
+
+Assigns different sparsity levels to layers based on their sensitivity:
+
+1. Computes layer sensitivities using Hessian trace estimation
+2. Ranks layers by sensitivity (higher sensitivity = lower sparsity)
+3. Assigns sparsity levels using a controlled range (target ± alpha)
+4. Ensures overall target sparsity is precisely achieved
+
+## Evaluation
+
+```python
+# Evaluate a pruned model
+metrics = utility_obs_evaluate(
+    model=pruned_model,
+    processor=processor,
+    num_samples=100,
+    device=0
+)
+
+print(f"WER: {metrics['wer']:.2f}%")
+print(f"CER: {metrics['cer']:.2f}%")
+print(f"Normalized WER: {metrics['normalized_wer']:.2f}%")
+print(f"Normalized CER: {metrics['normalized_cer']:.2f}%")
+```
 
 ## Usage Examples
 
-### Basic Pruning
+### Pruning and Evaluation Script
 
 ```python
 import torch
-from transformers import WhisperForConditionalGeneration
-from whisper_obs_pruning import WhisperOBSPruner
+from transformers import WhisperForConditionalGeneration, WhisperProcessor
+from utils.obs import utility_obs_prune, utility_obs_evaluate
 
 # Load model
 model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-tiny")
+processor = WhisperProcessor.from_pretrained("openai/whisper-tiny")
 
-# Create pruner
-pruner = WhisperOBSPruner(model)
+# Define sparsity levels to test
+sparsities = [0.1, 0.3, 0.5, 0.7, 0.9]
+results = {}
 
-# Run forward pass to collect data
-dummy_input = torch.randn(1, 80, 3000)
-with torch.no_grad():
-    _ = model.generate(dummy_input, max_length=100)
+# Audio path for pruning
+audio_path = "/path/to/audio/sample.flac"
 
-# Accumulate Hessian matrices
-pruner.accumulate_hessian(max_samples=500)
-
-# Prune to 30% sparsity
-pruned_weights = pruner.prune_model(sparsity=0.3)
-
-# Cleanup
-pruner.cleanup()
+# Test different sparsity levels
+for sparsity in sparsities:
+    # Prune model
+    pruned_model = utility_obs_prune(
+        model=model,
+        processor=processor,
+        audio_path=audio_path,
+        sparsity=sparsity,
+        device=0
+    )
+    
+    # Evaluate pruned model
+    metrics = utility_obs_evaluate(
+        model=pruned_model,
+        processor=processor,
+        num_samples=100,
+        device=0
+    )
+    
+    # Store results
+    results[sparsity] = metrics
+    
+    # Clean up GPU memory
+    del pruned_model
+    torch.cuda.empty_cache()
 ```
 
-### Targeted Layer Pruning
+### Comparing Pruning Methods
 
-```python
-# Prune only attention layers
-attention_layers = [
-    name for name in pruner.obs_data.keys() 
-    if 'attn' in name and 'proj' in name
-]
-
-pruned_weights = pruner.prune_model(
-    sparsity=0.4, 
-    target_layers=attention_layers
-)
-```
-
-### Layer Information
-
-```python
-# Get information about all layers
-layer_info = pruner.get_layer_info()
-for name, info in layer_info.items():
-    print(f"{name}: {info['shape']}, sparsity: {info['sparsity']:.3f}")
-```
-
-## Whisper Model Structure
-
-The implementation targets these Linear layers in Whisper:
-
-- **Encoder Layers**: `fc1`, `fc2` (feed-forward networks)
-- **Attention Layers**: `k_proj`, `v_proj`, `q_proj`, `out_proj`
-- **Output Projection**: `proj_out` (final output layer)
-
-Total: 65 Linear layers in Whisper-tiny model
-
-## Performance Considerations
-
-- **Memory Usage**: Hessian matrices are stored in double precision
-- **Computation Time**: O(n³) complexity for matrix operations
-- **Batch Processing**: Processes layers in parallel for efficiency
-- **GPU Memory**: Uses CUDA memory management for large models
-
-## Testing
-
-Run the test script to verify functionality:
+The repository includes tools to compare different pruning methods:
 
 ```bash
-python test_whisper_obs.py
+python eval.py --model openai/whisper-tiny --method obs --sparsities 0.1,0.3,0.5,0.7,0.9 --output obs_results.json
+python eval.py --model openai/whisper-tiny --method imp_global --sparsities 0.1,0.3,0.5,0.7,0.9 --output imp_global_results.json
+python eval.py --model openai/whisper-tiny --method imp_local --sparsities 0.1,0.3,0.5,0.7,0.9 --output imp_local_results.json
+
+python plot.py --files obs_results.json imp_global_results.json imp_local_results.json --output comparison.png
 ```
 
-This will:
-1. Load a Whisper model
-2. Collect Hessian data
-3. Prune the model
-4. Test both original and pruned models
-5. Display performance metrics
+## Technical Details
+
+### OBS Algorithm with Diagonal Approximation
+
+1. **Hessian Trace Estimation**: Uses Hutchinson's algorithm for efficient trace estimation
+   ```python
+   # Hutchinson's method: trace(H) ≈ E[z^T H z] where z is random
+   z = torch.randn(rows, cols, device=device)
+   Hz = torch.zeros_like(z)
+   # ... matrix operations ...
+   trace_estimate += torch.sum(z * Hz).item()
+   ```
+
+2. **Efficient Pruning**: Processes weights in batches and chunks for memory efficiency
+   ```python
+   # Process rows in parallel batches
+   for i1 in range(0, rows, batch_size):
+       i2 = min(i1 + batch_size, rows)
+       # ... pruning operations ...
+   ```
+
+### IMP Implementation
+
+Supports both local (layer-wise) and global (model-wide) magnitude pruning:
+
+- **Local IMP**: Prunes a fixed percentage of weights from each layer independently
+- **Global IMP**: Prunes weights across all layers based on absolute magnitude
 
 ## Dependencies
 
 - PyTorch
 - Transformers
-- TorchAudio (for audio processing)
+- TorchAudio
+- NumPy
+- Matplotlib
+- Evaluate
 
 ## Notes
 
-- The implementation focuses on unstructured pruning (individual weight removal)
-- For structured pruning (N:M patterns), use the original `trueobs.py` implementation
-- Hessian accumulation requires multiple forward passes with representative data
-- Pruning is performed in-place on the model weights
+- GPU device selection is critical for large models - use the `device` parameter consistently
+- Mixed sparsity pruning provides better results than uniform sparsity
+- The improved saliency metric with first-order information enhances pruning quality
+- For best results with large models (base/medium/large), ensure sufficient GPU memory

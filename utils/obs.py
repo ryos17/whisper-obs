@@ -67,7 +67,7 @@ class WhisperOBSPruner:
             return hook_fn
         
         # Register hooks for all Linear layers
-        for name, module in self.model.named_modules():
+        for name, module in tqdm(self.model.named_modules(), desc="Registering hooks", leave=False):
             if isinstance(module, nn.Linear):
                 hook = module.register_forward_hook(create_hook(name))
                 self.hooks.append(hook)
@@ -85,7 +85,7 @@ class WhisperOBSPruner:
         if self.debug:
             print("Accumulating diagonal Hessian matrices...")
         
-        for name, data in self.obs_data.items():
+        for name, data in tqdm(self.obs_data.items(), desc="Accumulating Hessian matrices", leave=False):
             if not data['inputs']:
                 continue
                 
@@ -245,7 +245,7 @@ class WhisperOBSPruner:
         # Get list of layers to process
         layer_names = list(self.obs_data.keys())
         
-        for layer_name in layer_names:
+        for layer_name in tqdm(layer_names, desc="Computing layer sensitivities", leave=False):
             sensitivity = self._estimate_hessian_trace(layer_name, num_samples)
             sensitivities[layer_name] = sensitivity
             
@@ -407,7 +407,7 @@ class WhisperOBSPruner:
         layer_sparsities = self.compute_mixed_sparsities(sparsity, alpha)
 
         # Prune each layer with its assigned sparsity
-        for layer_name in target_layers:
+        for layer_name in tqdm(target_layers, desc="Pruning layers", leave=False):
             if layer_name in self.obs_data:
                 layer_sparsity = layer_sparsities[layer_name]
                 
@@ -612,6 +612,10 @@ def utility_obs_evaluate(model, processor, num_samples=None, device=0, debug=Fal
                 task="transcribe"
             )
             pred_text = processor.batch_decode(output, skip_special_tokens=True)[0]
+
+            if debug:   
+                print(f"{'Predicted text:':<20} {pred_text}")
+                print(f"{'Reference text:':<20} {ref_text}")
     
         # Store results
         predictions.append(pred_text)
