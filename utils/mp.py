@@ -2,9 +2,7 @@ import torch
 import torch.nn as nn
 import torchaudio
 import copy
-import evaluate
 from tqdm import tqdm
-from transformers.models.whisper.english_normalizer import BasicTextNormalizer
 from typing import Dict, List, Optional
 from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
@@ -94,7 +92,7 @@ class WhisperMPPruner:
         if target_layers is None:
             target_layers = list(self.layers_info.keys())
         
-        for layer_name in target_layers:
+        for layer_name in tqdm(target_layers, desc="Pruning indivisual layers", leave=False):
             if layer_name in self.layers_info:
                 self.prune_layer_local(layer_name, sparsity)
     
@@ -132,7 +130,7 @@ class WhisperMPPruner:
                 print(f"Global pruning threshold: {threshold.item():.6f} for sparsity {sparsity:.2%}")
             
             # Apply threshold to each layer
-            for name in target_layers:
+            for name in tqdm(target_layers, desc="Pruning global layers", leave=False):
                 if name in filtered_layers:
                     data = filtered_layers[name]
                     W = data['weight'].clone()
@@ -153,22 +151,20 @@ class WhisperMPPruner:
                         print(f"{name:<50} | Actual: {actual_sparsity:.2%}")
     
     
-    def get_layer_info(self) -> Dict[str, Dict]:
+    def get_model_info(self) -> Dict[str, Dict]:
         """
-        Get information about all Linear layers in the model.
+        Get information about the model.
         
         Returns:
-            Dictionary with layer information
+            Dictionary with model information
         """
         info = {}
-        for name, layer in self.model.named_modules():
+        info['initial_num_prunable_params'] = 0
+        info['final_num_prunable_params'] = 0
+        for _, layer in self.model.named_modules():
             if isinstance(layer, nn.Linear):
-                weight = layer.weight.data
-                info[name] = {
-                    'shape': weight.shape,
-                    'sparsity': (weight == 0).float().mean().item(),
-                    'n_params': weight.numel()
-                }
+                info['initial_num_prunable_params'] += layer.weight.data.numel()
+                info['final_num_prunable_params'] += (layer.weight.data != 0).sum().item()
         return info
     
     def cleanup(self):
@@ -235,17 +231,6 @@ def utility_mp_prune(
     else:  # local
         pruner.prune_model_local(sparsity)
     
-    # Calculate actual sparsity
-    total_zeros = sum((layer.weight.data == 0).sum().item() for name, layer in pruned_model.named_modules() 
-                     if isinstance(layer, nn.Linear))
-    total_params = sum(layer.weight.data.numel() for name, layer in pruned_model.named_modules() 
-                      if isinstance(layer, nn.Linear))
-    
-    actual_sparsity = total_zeros / total_params
-    
-    if debug:
-        print(f"Actual sparsity after pruning: {actual_sparsity:.2%}")
-    
     # Test both models
     if debug:
         print("-" * 60)
@@ -261,14 +246,15 @@ def utility_mp_prune(
         print(f"{'Pruned output:':<20} {pruned_text}")
     
     # Calculate model size reduction
-    initial_params = sum((p != 0).sum().item() for p in model.parameters())
-    final_params = sum((p != 0).sum().item() for p in pruned_model.parameters())
-    actual_sparsity = 1 - (final_params / initial_params)
+    layer_info = pruner.get_model_info()
+    initial_prunable = layer_info['initial_num_prunable_params']
+    final_prunable = layer_info['final_num_prunable_params']
+    actual_sparsity = 1 - (final_prunable / initial_prunable)
     print("-" * 60)
-    print(f"{'Initial parameters:':<25} {initial_params:,}")
-    print(f"{'Final parameters:':<25} {final_params:,}")
-    print(f"{'Parameters removed:':<25} {initial_params - final_params:,}")
-    print(f"{'Actual sparsity:':<25} {actual_sparsity:.2%}")
+    print(f"{'Prunable weights (initial)':<30} {initial_prunable:,}")
+    print(f"{'Prunable weights (final)':<30} {final_prunable:,}")
+    print(f"{'Weights pruned:':<30} {initial_prunable - final_prunable:,}")
+    print(f"{'Actual sparsity:':<30} {actual_sparsity:.2%}")
     
     # Cleanup
     if debug:
@@ -278,95 +264,3 @@ def utility_mp_prune(
     
     # Return the pruned model
     return pruned_model
-
-
-def utility_mp_evaluate(model, processor, num_samples=None, device=0, debug=False):
-    """
-    Evaluate a model on a dataset and return WER and CER.
-    
-    Args:
-        model: Whisper model to evaluate
-        processor: Whisper processor
-        num_samples: Number of samples to evaluate. None means all samples (default: None)
-        device: Device to run on (default: 0)
-        debug: Whether to print debug information (default: False)
-        
-    Returns:
-        Dictionary with WER and CER metrics
-    """
-    # Move model to GPU
-    if debug:
-        print("-" * 60)
-        print("Moving model to GPU...")
-    model = model.to(f"cuda:{device}")
-
-    # Load metrics
-    wer_metric = evaluate.load("wer")
-    cer_metric = evaluate.load("cer")
-    whisper_norm = BasicTextNormalizer()
-
-    # Load evaluation dataset from custom files
-    if debug:
-        print("-" * 60)
-        print("Loading evaluation dataset...")
-    with open("custom_data/LibriSpeech/test-clean/audio_paths", "r") as f:
-        audio_paths = [line.strip().split(" ", 1)[1] for line in f.readlines()]
-    with open("custom_data/LibriSpeech/test-clean/text", "r") as f:
-        texts = [line.strip().split(" ", 1)[1] for line in f.readlines()]
-    
-    # Take first num_samples samples if specified
-    if num_samples is not None:
-        audio_paths = audio_paths[:num_samples]
-        texts = texts[:num_samples]
-    
-    # Set decoder prompt for English transcription
-    model.config.forced_decoder_ids = (
-        processor.tokenizer.get_decoder_prompt_ids(task="transcribe", language="english")
-    )
-    
-    predictions = []
-    references = []
-    norm_predictions = []
-    norm_references = []
-    
-    # Process dataset item by item
-    for i in tqdm(range(len(audio_paths)), desc=f"Evaluating on {num_samples} samples", leave=False):
-        audio_path = audio_paths[i]
-        ref_text = texts[i]
-        
-        # Load and process audio
-        audio, _ = torchaudio.load(audio_path)
-        audio_array = audio.squeeze().numpy()
-        
-        # Process audio and generate prediction
-        inputs = processor(audio_array, sampling_rate=16000, return_tensors="pt")
-        input_features = inputs.input_features.to(device)
-        
-        # Generate prediction
-        with torch.no_grad():
-            output = model.generate(
-                input_features, 
-                max_length=100,
-                language="english",
-                task="transcribe"
-            )
-            pred_text = processor.batch_decode(output, skip_special_tokens=True)[0]
-    
-        # Store results
-        predictions.append(pred_text)
-        references.append(ref_text)
-        norm_predictions.append(whisper_norm(pred_text))
-        norm_references.append(whisper_norm(ref_text))
-    
-    # Calculate metrics
-    wer = wer_metric.compute(references=references, predictions=predictions)
-    cer = cer_metric.compute(references=references, predictions=predictions)
-    norm_wer = wer_metric.compute(references=norm_references, predictions=norm_predictions)
-    norm_cer = cer_metric.compute(references=norm_references, predictions=norm_predictions)
-    
-    return {
-        "wer": round(100 * wer, 10),
-        "cer": round(100 * cer, 10),
-        "normalized_wer": round(100 * norm_wer, 10),
-        "normalized_cer": round(100 * norm_cer, 10)
-    }

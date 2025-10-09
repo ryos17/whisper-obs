@@ -1,10 +1,14 @@
 import json
 import argparse
-from transformers import WhisperForConditionalGeneration, WhisperProcessor
-from utils.obs import utility_obs_prune, utility_obs_evaluate
-from utils.mp import utility_mp_prune, utility_mp_evaluate
 import torch
 import copy
+from tqdm import tqdm
+import evaluate
+import torchaudio
+from transformers.models.whisper.english_normalizer import BasicTextNormalizer
+from transformers import WhisperForConditionalGeneration, WhisperProcessor
+from utils.obs import utility_obs_prune
+from utils.mp import utility_mp_prune
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate pruned Whisper models at different sparsity levels")
@@ -22,6 +26,101 @@ def parse_args():
     parser.add_argument("--device", type=int, default=0,
                         help="GPU device ID to use (default: 0)")
     return parser.parse_args()
+
+def evaluate_pruned_model(model, processor, num_samples=None, device=0, debug=False):
+    """
+    Evaluate a model on a dataset and return WER and CER.
+    
+    Args:
+        model: Whisper model to evaluate
+        processor: Whisper processor
+        num_samples: Number of samples to evaluate. None means all samples (default: None)
+        device: Device to run on (default: 0)
+        debug: Whether to print debug information (default: False)
+        
+    Returns:
+        Dictionary with WER and CER metrics
+    """
+    # Move model to GPU
+    if debug:
+        print("-" * 60)
+        print("Moving model to GPU...")
+    model = model.to(f"cuda:{device}")
+
+    # Load metrics
+    wer_metric = evaluate.load("wer")
+    cer_metric = evaluate.load("cer")
+    whisper_norm = BasicTextNormalizer()
+
+    # Load evaluation dataset from custom files
+    if debug:
+        print("-" * 60)
+        print("Loading evaluation dataset...")
+    with open("custom_data/LibriSpeech/test-clean/audio_paths", "r") as f:
+        audio_paths = [line.strip().split(" ", 1)[1] for line in f.readlines()]
+    with open("custom_data/LibriSpeech/test-clean/text", "r") as f:
+        texts = [line.strip().split(" ", 1)[1] for line in f.readlines()]
+    
+    # Take first num_samples samples if specified
+    if num_samples is not None:
+        audio_paths = audio_paths[:num_samples]
+        texts = texts[:num_samples]
+    
+    # Set decoder prompt for English transcription
+    model.config.forced_decoder_ids = (
+        processor.tokenizer.get_decoder_prompt_ids(task="transcribe", language="english")
+    )
+    
+    predictions = []
+    references = []
+    norm_predictions = []
+    norm_references = []
+    
+    # Process dataset item by item
+    for i in tqdm(range(len(audio_paths)), desc=f"Evaluating on {num_samples} samples", leave=False):
+        audio_path = audio_paths[i]
+        ref_text = texts[i]
+        
+        # Load and process audio
+        audio, _ = torchaudio.load(audio_path)
+        audio_array = audio.squeeze().numpy()
+        
+        # Process audio and generate prediction
+        inputs = processor(audio_array, sampling_rate=16000, return_tensors="pt")
+        input_features = inputs.input_features.to(device)
+        
+        # Generate prediction
+        with torch.no_grad():
+            output = model.generate(
+                input_features, 
+                max_length=100,
+                language="english",
+                task="transcribe"
+            )
+            pred_text = processor.batch_decode(output, skip_special_tokens=True)[0]
+
+            if debug:   
+                print(f"{'Predicted text:':<20} {pred_text}")
+                print(f"{'Reference text:':<20} {ref_text}")
+    
+        # Store results
+        predictions.append(pred_text)
+        references.append(ref_text)
+        norm_predictions.append(whisper_norm(pred_text))
+        norm_references.append(whisper_norm(ref_text))
+    
+    # Calculate metrics
+    wer = wer_metric.compute(references=references, predictions=predictions)
+    cer = cer_metric.compute(references=references, predictions=predictions)
+    norm_wer = wer_metric.compute(references=norm_references, predictions=norm_predictions)
+    norm_cer = cer_metric.compute(references=norm_references, predictions=norm_predictions)
+    
+    return {
+        "wer": round(100 * wer, 10),
+        "cer": round(100 * cer, 10),
+        "normalized_wer": round(100 * norm_wer, 10),
+        "normalized_cer": round(100 * norm_cer, 10)
+    }
 
 def main():
     # Parse command line arguments
@@ -75,21 +174,12 @@ def main():
                     device=args.device
                 )
         
-        # Evaluate pruned model
-        if args.method == "obs":
-            metrics = utility_obs_evaluate(
-                model=pruned_model,
-                processor=processor,
-                num_samples=args.num_samples,
-                device=args.device,
-            )
-        else:  
-            metrics = utility_mp_evaluate(
-                model=pruned_model,
-                processor=processor,
-                num_samples=args.num_samples,
-                device=args.device,
-            )
+        metrics = evaluate_pruned_model(
+            model=pruned_model,
+            processor=processor,
+            num_samples=args.num_samples,
+            device=args.device,
+        )
         
         # Clean up GPU memory
         del pruned_model
@@ -99,10 +189,10 @@ def main():
         results[sparsity] = metrics
 
         print(f"{'-'*60}")
-        print(f"{'WER:':<25} {metrics['wer']:.2f}%")
-        print(f"{'CER:':<25} {metrics['cer']:.2f}%")
-        print(f"{'Normalized WER:':<25} {metrics['normalized_wer']:.2f}%")
-        print(f"{'Normalized CER:':<25} {metrics['normalized_cer']:.2f}%")
+        print(f"{'WER:':<30} {metrics['wer']:.2f}%")
+        print(f"{'CER:':<30} {metrics['cer']:.2f}%")
+        print(f"{'Normalized WER:':<30} {metrics['normalized_wer']:.2f}%")
+        print(f"{'Normalized CER:':<30} {metrics['normalized_cer']:.2f}%")
 
     # Save results to JSON
     output_file = args.output
