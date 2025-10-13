@@ -9,6 +9,8 @@ from transformers.models.whisper.english_normalizer import BasicTextNormalizer
 from transformers import WhisperForConditionalGeneration, WhisperProcessor
 from utils.obs import utility_obs_prune
 from utils.mp import utility_mp_prune
+from utils.iobs import utility_iobs_prune
+from utils.imp import utility_imp_prune
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate pruned Whisper models at different sparsity levels")
@@ -19,12 +21,16 @@ def parse_args():
     parser.add_argument("--audio", type=str, 
                         default="/datasets/speech/LibriSpeech/dev-clean/3081/166546/3081-166546-0000.flac",
                         help="Path to audio file for pruning")
-    parser.add_argument("--method", type=str, default="obs", choices=["obs", "mp_local", "mp_global"],
+    parser.add_argument("--method", type=str, default="obs", choices=["obs", "mp_local", "mp_global", "iobs", "imp_local", "imp_global"],
                         help="Pruning method to use (default: obs)")
     parser.add_argument("--num-samples", type=int, default=100,
                         help="Number of samples for evaluation (default: 100)")
     parser.add_argument("--device", type=int, default=0,
                         help="GPU device ID to use (default: 0)")
+    parser.add_argument("--sparsities", type=str, default="0.0,0.05,0.1,0.15,0.2,0.25,0.3,0.35,0.4,0.45,0.5,0.55,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.95,1.0",
+                        help="Sparsities to evaluate (default: 0.0,0.05,0.1,0.15,0.2,0.25,0.3,0.35,0.4,0.45,0.5,0.55,0.6,0.65,0.7,0.75,0.8,0.85,0.9,0.95,1.0)")
+    parser.add_argument("--debug", action="store_true", default=False,
+                        help="Whether to print debug information (default: False)")
     return parser.parse_args()
 
 def evaluate_pruned_model(model, processor, num_samples=None, device=0, debug=False):
@@ -132,7 +138,7 @@ def main():
     processor = WhisperProcessor.from_pretrained(args.model)
 
     # Define sparsity levels to test
-    sparsities = [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.9, 0.95, 1.0]
+    sparsities = [float(s) for s in args.sparsities.split(",")]
     
     # Results dictionary
     results = {}
@@ -153,7 +159,8 @@ def main():
                     processor=processor,
                     audio_path=args.audio,
                     sparsity=sparsity,
-                    device=args.device
+                    device=args.device,
+                    debug=args.debug
                 )
             elif args.method == "mp_local":
                 pruned_model = utility_mp_prune(
@@ -162,7 +169,8 @@ def main():
                     audio_path=args.audio,
                     sparsity=sparsity,
                     prune_method="local",
-                    device=args.device
+                    device=args.device,
+                    debug=args.debug
                 )
             elif args.method == "mp_global":
                 pruned_model = utility_mp_prune(
@@ -171,14 +179,47 @@ def main():
                     audio_path=args.audio,
                     sparsity=sparsity,
                     prune_method="global",
-                    device=args.device
+                    device=args.device,
+                    debug=args.debug
                 )
-        
+            elif args.method == "iobs":
+                pruned_model = utility_iobs_prune(
+                    model=model,
+                    processor=processor,
+                    audio_path=args.audio,
+                    sparsities=[0.4, 0.5, 0.6, 0.7],
+                    device=args.device,
+                    debug=args.debug
+                )
+            elif args.method == "imp_local":
+                pruned_model = utility_imp_prune(
+                    model=model,
+                    processor=processor,
+                    audio_path=args.audio,
+                    sparsities=[0.4, 0.5, 0.6, 0.7],
+                    device=args.device,
+                    debug=args.debug,
+                    prune_method="local"
+                )
+            elif args.method == "imp_global":
+                pruned_model = utility_imp_prune(
+                    model=model,
+                    processor=processor,
+                    audio_path=args.audio,
+                    sparsities=[0.4, 0.5, 0.6, 0.7],
+                    device=args.device,
+                    debug=args.debug,
+                    prune_method="global"
+                )
+            else:
+                raise ValueError(f"Invalid method: {args.method}")
+
         metrics = evaluate_pruned_model(
             model=pruned_model,
             processor=processor,
             num_samples=args.num_samples,
             device=args.device,
+            debug=args.debug,
         )
         
         # Clean up GPU memory
@@ -196,18 +237,15 @@ def main():
 
     # Save results to JSON
     output_file = args.output
-    print(f"\n{'='*60}")
-    print(f"Saving results to {output_file}")
-    print("=" * 60)
-    
     with open(output_file, 'w') as f:
         json.dump(results, f, indent=2)
     
+    print("=" * 60)
     print("Evaluation completed!")
     print(f"Results saved to: {output_file}")
     
     # Print summary
-    print(f"\n{'='*60}")
+    print("=" * 60)
     print("SUMMARY")
     print("=" * 60)
     print(f"{'Sparsity':<10} {'WER':<8} {'CER':<8} {'Norm WER':<10} {'Norm CER':<10}")

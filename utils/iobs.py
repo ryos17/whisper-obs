@@ -1,192 +1,165 @@
-import os
-import copy
 import torch
-import subprocess
-from typing import List, Optional, Dict, Union
-from transformers import WhisperForConditionalGeneration, WhisperProcessor
-from utils.obs import utility_obs_prune, WhisperOBSPruner
+import copy
+from dataclasses import dataclass
+from typing import Any, Dict, List, Union
+from transformers import WhisperForConditionalGeneration, WhisperProcessor, Seq2SeqTrainer, Seq2SeqTrainingArguments
+from utils.obs import utility_obs_prune
+from datasets import load_from_disk, Audio
+import evaluate
+from transformers.models.whisper.english_normalizer import BasicTextNormalizer
 
-class WhisperIOBSPruner:
-    """
-    Iterative OBS Pruner for Whisper models.
-    This class applies OBS pruning followed by fine-tuning in multiple stages.
-    """
-    
-    def __init__(self, model: WhisperForConditionalGeneration, device: int = 0, debug: bool = False):
-        """
-        Initialize the IOBS pruner.
-        
-        Args:
-            model: The Whisper model to be pruned
-            device: GPU device ID to use
-            debug: Whether to print debug information
-        """
-        self.model = model
-        self.device = device
-        self.debug = debug
-        self.mask = None  # Will store the pruning mask
-        
-    def update_mask(self):
-        """Update the pruning mask based on current model weights."""
-        if self.mask is None:
-            # Initialize mask dictionary for all linear layers
-            self.mask = {}
-            for name, module in self.model.named_modules():
-                if isinstance(module, torch.nn.Linear):
-                    self.mask[name] = torch.ones_like(module.weight.data, dtype=torch.bool)
-        
-        # Update mask based on current zeros in the model
-        for name, module in self.model.named_modules():
-            if isinstance(module, torch.nn.Linear) and name in self.mask:
-                self.mask[name] = self.mask[name] & (module.weight.data != 0)
-    
-    def apply_mask(self):
-        """Apply the stored mask to ensure pruned weights stay at zero."""
-        if self.mask is None:
-            return
-            
-        for name, module in self.model.named_modules():
-            if isinstance(module, torch.nn.Linear) and name in self.mask:
-                module.weight.data = module.weight.data * self.mask[name]
 
 def utility_iobs_prune(
     model: WhisperForConditionalGeneration,
     processor: WhisperProcessor,
     audio_path: str,
     sparsities: List[float],
-    train_datasets: List[str],
-    eval_datasets: List[str],
-    output_dir: str = "iobs_model",
+    batch_size: int = 128,
     device: int = 0,
+    alpha: float = 0.03,
+    train_batch_size: int = 8,
+    eval_batch_size: int = 8,
+    num_cpu_workers: int = 32,
+    epochs: int = 2,
+    learning_rate: float = 3.75e-5,
     debug: bool = False,
-    learning_rate: float = 1e-5,
-    num_steps: int = 1000,
-    train_batchsize: int = 16,
-    eval_batchsize: int = 8,
-    eval_save_steps: int = 200,
-    alpha: float = 0.1,
-) -> WhisperForConditionalGeneration:
+):
     """
-    Apply Iterative OBS pruning with fine-tuning between pruning stages.
+    Prune a Whisper model using the Iterative Optimal Brain Surgeon algorithm
+    with fine-tuning between pruning steps.
     
     Args:
         model: Whisper model to prune
         processor: Whisper processor
-        audio_path: Path to audio file for OBS pruning
-        sparsities: List of sparsity levels to apply sequentially
-        train_datasets: List of training dataset paths
-        eval_datasets: List of evaluation dataset paths
-        output_dir: Directory to save fine-tuned models
-        device: GPU device ID to use
-        debug: Whether to print debug information
-        learning_rate: Learning rate for fine-tuning
-        num_steps: Number of fine-tuning steps per stage
-        train_batchsize: Batch size for training
-        eval_batchsize: Batch size for evaluation
-        eval_save_steps: Steps between evaluations
-        alpha: Alpha parameter for OBS mixed sparsity
+        audio_path: Path to the calibration audio file
+        sparsities: Single sparsity level or list of sparsity levels to prune iteratively
+        batch_size: Batch size for pruning (default: 128)
+        device: Device to run on (default: 0)
+        alpha: Hyperparameter controlling the range of sparsity for mixed pruning (default: 0.03)
+        train_batch_size: Batch size for fine-tuning (default: 8)
+        eval_batch_size: Batch size for evaluation during fine-tuning (default: 8)
+        num_cpu_workers: Number of CPU workers for data loading (default: 32)
+        epochs: Number of fine-tuning epochs after each pruning step (default: 2)
+        learning_rate: Learning rate for fine-tuning (default: 3.75e-5)
+        debug: Whether to print debug information (default: False)
         
     Returns:
-        The pruned and fine-tuned model
+        Pruned model
     """
-    if debug:
-        print("-" * 60)
-        print(f"Starting Iterative OBS pruning with {len(sparsities)} stages")
+    # Hardcoded paths for fine-tuning
+    finetune_dataset_path = "librispeech/train-clean-100"
+    eval_dataset_path = "librispeech/dev-clean"
+
+    # Load the fine-tuning datasets
+    train_dataset = load_from_disk(finetune_dataset_path)
+    eval_dataset = load_from_disk(eval_dataset_path)
+    train_dataset = train_dataset.cast_column("audio", Audio(sampling_rate=16000))
+    eval_dataset = eval_dataset.cast_column("audio", Audio(sampling_rate=16000))
+    whisper_norm = BasicTextNormalizer()
+
+    # Processing and prepare_dataset
+    def prepare_dataset(batch):
+        audio = batch["audio"]
+        batch["input_features"] = processor.feature_extractor(audio["array"], sampling_rate=audio["sampling_rate"]).input_features[0]
+        batch["input_length"] = len(audio["array"]) / audio["sampling_rate"]
+
+        # Use "sentence" column for transcripts 
+        transcription = batch["sentence"] if "sentence" in batch else (batch["text"] if "text" in batch else "")
+        transcription = whisper_norm(transcription)
         
-    # Create a deep copy of the model to avoid modifying the original
+        batch["labels"] = processor.tokenizer(transcription).input_ids
+        return batch
+
+    train_dataset = train_dataset.map(prepare_dataset, num_proc=num_cpu_workers)
+    eval_dataset = eval_dataset.map(prepare_dataset, num_proc=num_cpu_workers)
+    
+    @dataclass
+    class DataCollatorSpeechSeq2SeqWithPadding:
+        processor: Any
+
+        def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
+            input_features = [{"input_features": feature["input_features"]} for feature in features]
+            batch = self.processor.feature_extractor.pad(input_features, return_tensors="pt")
+            label_features = [{"input_ids": feature["labels"]} for feature in features]
+            labels_batch = self.processor.tokenizer.pad(label_features, return_tensors="pt")
+            labels = labels_batch["input_ids"].masked_fill(labels_batch.attention_mask.ne(1), -100)
+            if (labels[:, 0] == self.processor.tokenizer.bos_token_id).all().cpu().item():
+                labels = labels[:, 1:]
+            batch["labels"] = labels
+            return batch
+
+    data_collator = DataCollatorSpeechSeq2SeqWithPadding(processor=processor)
+
+    # Training arguments
+    training_args = Seq2SeqTrainingArguments(
+        output_dir="output/test",
+        per_device_train_batch_size=train_batch_size,
+        gradient_accumulation_steps=1,
+        learning_rate=learning_rate,
+        warmup_steps=10,
+        lr_scheduler_type="cosine",
+        gradient_checkpointing=True,
+        fp16=True,
+        evaluation_strategy="epoch",
+        save_strategy="epoch",
+        num_train_epochs=epochs,
+        per_device_eval_batch_size=eval_batch_size,
+        predict_with_generate=True,
+        generation_max_length=100,
+        logging_steps=500,
+        report_to=["tensorboard"],
+        load_best_model_at_end=True,
+        metric_for_best_model="wer",
+        greater_is_better=False,
+        optim="adamw_bnb_8bit",
+        dataloader_num_workers=num_cpu_workers,
+    )
+
+    # Define metrics
+    metric = evaluate.load("wer")
+    def compute_metrics(pred):
+        pred_ids = pred.predictions
+        label_ids = pred.label_ids
+
+        # replace -100 with the pad_token_id
+        label_ids[label_ids == -100] = processor.tokenizer.pad_token_id
+
+        # we do not want to group tokens when computing the metrics
+        pred_str = processor.tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
+        label_str = processor.tokenizer.batch_decode(label_ids, skip_special_tokens=True)
+
+        wer = 100 * metric.compute(predictions=pred_str, references=label_str)
+        return {"wer": wer}
+        
+    # Create a deep copy of the model to prune
     pruned_model = copy.deepcopy(model)
     
-    # Initialize IOBS pruner
-    iobs_pruner = WhisperIOBSPruner(pruned_model, device=device, debug=debug)
-    
-    # Process each sparsity level sequentially
-    for i, sparsity in enumerate(sparsities):
-        if debug:
-            print("=" * 60)
-            print(f"Stage {i+1}/{len(sparsities)}: Sparsity {sparsity:.1%}")
-            
-        # 1. Apply OBS pruning at current sparsity level
-        if debug:
-            print("-" * 60)
-            print(f"Applying OBS pruning at sparsity {sparsity:.1%}")
-            
+    # Process each sparsity level iteratively
+    for sparsity in sparsities:    
+        # Apply OBS pruning for this stage
         pruned_model = utility_obs_prune(
-            model=pruned_model,
-            processor=processor,
-            audio_path=audio_path,
-            sparsity=sparsity,
+            pruned_model,
+            processor,
+            audio_path,
+            sparsity,
+            batch_size=batch_size,
             device=device,
             debug=debug,
             alpha=alpha
         )
-        
-        # Update the pruning mask after OBS
-        iobs_pruner.model = pruned_model
-        iobs_pruner.update_mask()
-        
-        # 2. Fine-tune the pruned model
-        if debug:
-            print("-" * 60)
-            print(f"Fine-tuning model at sparsity {sparsity:.1%}")
-            
-        # Create a temporary directory for this stage's output
-        stage_output_dir = os.path.join(output_dir, f"stage_{i+1}_sparsity_{int(sparsity*100)}")
-        os.makedirs(stage_output_dir, exist_ok=True)
-        
-        # Save the model for fine-tuning
-        temp_model_dir = os.path.join(stage_output_dir, "pre_finetune")
-        os.makedirs(temp_model_dir, exist_ok=True)
-        pruned_model.save_pretrained(temp_model_dir)
-        processor.save_pretrained(temp_model_dir)
-        
-        # Prepare fine-tuning command
-        train_datasets_str = " ".join(train_datasets)
-        eval_datasets_str = " ".join(eval_datasets)
-        
-        finetune_cmd = [
-            "python", "train/fine-tune_on_custom_dataset.py",
-            f"--model_name={temp_model_dir}",
-            f"--train_datasets", *train_datasets,  # Properly handle list arguments
-            f"--eval_datasets", *eval_datasets,
-            f"--output_dir={stage_output_dir}",
-            f"--learning_rate={learning_rate}",
-            f"--train_strategy=steps",
-            f"--num_steps={num_steps}",
-            f"--train_batchsize={train_batchsize}",
-            f"--eval_batchsize={eval_batchsize}",
-            f"--eval_save_steps={eval_save_steps}",
-        ]
-        
-        # Execute fine-tuning
-        if debug:
-            print(f"Running fine-tuning command: {' '.join(finetune_cmd)}")
-        
-        try:
-            subprocess.run(finetune_cmd, check=True)
-        except subprocess.CalledProcessError as e:
-            print(f"Fine-tuning failed with error: {e}")
-            if debug:
-                print("Continuing with pruning without fine-tuning for this stage")
-        
-        # Load the fine-tuned model
-        pruned_model = WhisperForConditionalGeneration.from_pretrained(stage_output_dir)
-        pruned_model = pruned_model.to(f"cuda:{device}")
-        
-        # Apply mask to ensure pruned weights remain zero
-        iobs_pruner.model = pruned_model
-        iobs_pruner.apply_mask()
-        
-        if debug:
-            # Count non-zero parameters
-            non_zero = sum(p.numel() - (p == 0).sum().item() for p in pruned_model.parameters())
-            total = sum(p.numel() for p in pruned_model.parameters())
-            actual_sparsity = 1 - (non_zero / total)
-            print(f"After fine-tuning - Actual sparsity: {actual_sparsity:.2%} (target: {sparsity:.2%})")
+
+        # Fine-tune the pruned model
+        trainer = Seq2SeqTrainer(
+            args=training_args,
+            model=pruned_model,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            data_collator=data_collator,
+            compute_metrics=compute_metrics,
+            tokenizer=processor.feature_extractor,
+        )
+
+        trainer.train()
     
-    if debug:
-        print("=" * 60)
-        print("Iterative OBS pruning completed")
-    
+    # Return the pruned model
     return pruned_model
-
-

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.utils.prune as prune
 import torchaudio
 import copy
 from tqdm import tqdm
@@ -44,7 +45,7 @@ class WhisperMPPruner:
                 }
                 
                 if self.debug:
-                    print(f"Registered layer {name} with shape {module.weight.data.shape}")
+                    print(f"\tRegistered layer {name} with shape {module.weight.data.shape}")
     
     def prune_layer_local(self, layer_name: str, sparsity: float) -> None:
         """
@@ -58,28 +59,59 @@ class WhisperMPPruner:
             raise ValueError(f"Layer {layer_name} not found in model")
             
         data = self.layers_info[layer_name]
-        W = data['weight'].clone()
+        layer = data['layer']
+        W = layer.weight.data.clone().to(self.device)
         
-        # Calculate threshold for pruning
-        abs_weights = torch.abs(W)
-        k = int(W.numel() * sparsity)
-        if k > 0:  # Only prune if k > 0
-            threshold = torch.kthvalue(abs_weights.view(-1), k).values
+        # Check if there's already a weight mask from previous pruning
+        if hasattr(layer, 'weight_mask'):
+            mask = layer.weight_mask.clone().to(self.device)
+            current_sparsity = 1.0 - (mask == 1).sum().item() / mask.numel()
+            if self.debug:
+                print(f"\tUsing existing weight mask, current sparsity: {current_sparsity:.4f}")
+        else:
+            mask = torch.ones_like(W, dtype=torch.float32, device=self.device)
+            current_sparsity = 0.0
+            if self.debug:
+                print("\tCreating new weight mask")
+        
+        # Calculate how many more weights need to be pruned
+        total_weights = mask.numel()
+        current_pruned = (mask == 0).sum().item()
+        target_pruned = int(sparsity * total_weights)
+        additional_pruned = target_pruned - current_pruned
+        
+        if additional_pruned <= 0:
+            if self.debug:
+                print(f"\tNo additional pruning needed (target: {sparsity:.4f}, current: {current_sparsity:.4f})")
+            return
+        
+        # Calculate threshold for additional pruning
+        remaining_weights = W[mask == 1]
+        if len(remaining_weights) == 0:
+            if self.debug:
+                print("\tNo remaining weights to prune")
+            return
             
-            # Create binary mask (1 for weights to keep, 0 for weights to prune)
-            mask = torch.gt(abs_weights, threshold).float().to(self.device)
+        k = min(additional_pruned, len(remaining_weights))
+        if k > 0:
+            threshold = torch.kthvalue(torch.abs(remaining_weights), k).values
             
-            # Apply mask to weights
-            W = W * mask
+            # Create new mask for additional pruning
+            abs_weights = torch.abs(W)
+            new_mask = torch.gt(abs_weights, threshold).float().to(self.device)
             
-        # Update the actual layer weights
-        layer = self.layers_info[layer_name]['layer']
-        layer.weight.data = W
+            # Combine with existing mask
+            mask = mask * new_mask
             
+        # Apply the computed mask to the layer
+        prune.custom_from_mask(layer, 'weight', mask)
+        
         if self.debug:
-            n_pruned = (W == 0).sum().item()
-            actual_sparsity = n_pruned / W.numel()
-            print(f"{layer_name:<50} | Target: {sparsity:.2%}, Actual: {actual_sparsity:.2%}")
+            # Print sparsity achieved
+            total_mask_elements = layer.weight_mask.numel()
+            num_nonzero = (layer.weight_mask == 1).sum().item()
+            sparsity_achieved = 1.0 - (num_nonzero / total_mask_elements)
+            print(f"\t{layer_name:<50} | Sparsity: {sparsity_achieved:.4f}")
     
     def prune_model_local(self, sparsity: float, target_layers: Optional[List[str]] = None) -> None:
         """
@@ -112,43 +144,85 @@ class WhisperMPPruner:
         
         # Collect all weights into a single tensor for global threshold calculation
         all_weights = []
+        all_masks = []
         for name, data in filtered_layers.items():
-            all_weights.append(torch.abs(data['weight']).view(-1))
+            layer = data['layer']
+            W = layer.weight.data.clone().to(self.device)
+            
+            # Check if there's already a weight mask from previous pruning
+            if hasattr(layer, 'weight_mask'):
+                mask = layer.weight_mask.clone().to(self.device)
+            else:
+                mask = torch.ones_like(W, dtype=torch.float32, device=self.device)
+            
+            all_weights.append(torch.abs(W).view(-1))
+            all_masks.append(mask.view(-1))
             
         if not all_weights:
-            return {}
+            return
             
         all_weights_flat = torch.cat(all_weights)
-        total_params = all_weights_flat.numel()
-        k = int(total_params * sparsity)
+        all_masks_flat = torch.cat(all_masks)
         
-        if k > 0:  # Only prune if k > 0
-            # Calculate global threshold
-            threshold = torch.kthvalue(all_weights_flat, k).values
+        # Calculate target total weights to prune
+        total_weights = all_weights_flat.numel()
+        target_pruned = int(total_weights * sparsity)
+        current_pruned = (all_masks_flat == 0).sum().item()
+        additional_pruned = target_pruned - current_pruned
+        
+        if additional_pruned <= 0:
+            if self.debug:
+                print(f"\tNo additional pruning needed (target: {sparsity:.4f}, current: {current_pruned/total_weights:.4f})")
+            return
+        
+        # Only consider weights that are not already pruned
+        remaining_weights = all_weights_flat[all_masks_flat == 1]
+        total_remaining = len(remaining_weights)
+        
+        if total_remaining == 0:
+            if self.debug:
+                print("\tNo remaining weights to prune")
+            return
+        
+        # Calculate how many additional weights to prune from remaining weights
+        k = min(additional_pruned, total_remaining)
+        
+        if k > 0:
+            # Calculate global threshold for additional pruning
+            threshold = torch.kthvalue(remaining_weights, k).values
             
             if self.debug:
-                print(f"Global pruning threshold: {threshold.item():.6f} for sparsity {sparsity:.2%}")
+                print(f"\tGlobal pruning threshold: {threshold.item():.6f} for additional {k} weights")
             
             # Apply threshold to each layer
             for name in tqdm(target_layers, desc="Pruning global layers", leave=False):
                 if name in filtered_layers:
                     data = filtered_layers[name]
-                    W = data['weight'].clone()
-                    
-                    # Create binary mask (1 for weights to keep, 0 for weights to prune)
-                    mask = torch.gt(torch.abs(W), threshold).float().to(self.device)
-                    
-                    # Apply mask to weights
-                    W = W * mask
-                    
-                    # Update the actual layer weights
                     layer = data['layer']
-                    layer.weight.data = W
+                    W = layer.weight.data.clone().to(self.device)
+                    
+                    # Check if there's already a weight mask from previous pruning
+                    if hasattr(layer, 'weight_mask'):
+                        mask = layer.weight_mask.clone().to(self.device)
+                    else:
+                        mask = torch.ones_like(W, dtype=torch.float32, device=self.device)
+                    
+                    # Create new mask for additional pruning
+                    abs_weights = torch.abs(W)
+                    new_mask = torch.gt(abs_weights, threshold).float().to(self.device)
+                    
+                    # Combine with existing mask
+                    mask = mask * new_mask
+                    
+                    # Apply the computed mask to the layer
+                    prune.custom_from_mask(layer, 'weight', mask)
                     
                     if self.debug:
-                        n_pruned = (W == 0).sum().item()
-                        actual_sparsity = n_pruned / W.numel()
-                        print(f"{name:<50} | Actual: {actual_sparsity:.2%}")
+                        # Print sparsity achieved
+                        total_mask_elements = layer.weight_mask.numel()
+                        num_nonzero = (layer.weight_mask == 1).sum().item()
+                        sparsity_achieved = 1.0 - (num_nonzero / total_mask_elements)
+                        print(f"\t{name:<50} | Sparsity: {sparsity_achieved:.4f}")
     
     
     def get_model_info(self) -> Dict[str, Dict]:
@@ -162,9 +236,9 @@ class WhisperMPPruner:
         info['initial_num_prunable_params'] = 0
         info['final_num_prunable_params'] = 0
         for _, layer in self.model.named_modules():
-            if isinstance(layer, nn.Linear):
-                info['initial_num_prunable_params'] += layer.weight.data.numel()
-                info['final_num_prunable_params'] += (layer.weight.data != 0).sum().item()
+            if isinstance(layer, nn.Linear) and hasattr(layer, 'weight'):
+                info['initial_num_prunable_params'] += layer.weight_mask.numel()
+                info['final_num_prunable_params'] += (layer.weight_mask != 0).sum().item()
         return info
     
     def cleanup(self):
@@ -196,13 +270,7 @@ def utility_mp_prune(
         
     Returns:
         Pruned model
-    """
-    # Move model to GPU
-    if debug:
-        print("-" * 60)
-        print("Moving model to GPU...")
-    model = model.to(f"cuda:{device}")
-    
+    """    
     # Load and process sample audio
     if debug:
         print("-" * 60)
@@ -222,35 +290,28 @@ def utility_mp_prune(
     # Prune the model
     if debug:
         print("-" * 60)
-        print(f"Pruning model with {prune_method} magnitude pruning...")
-        print(f"Target sparsity: {sparsity:.2%}")
-    
-    # Call the appropriate pruning method
+        print(f"Pruning model with {prune_method} magnitude pruning (target sparsity: {sparsity:.2%})...")
     if prune_method == "global":
         pruner.prune_model_global(sparsity)
-    else:  # local
+    else:  
         pruner.prune_model_local(sparsity)
     
     # Test both models
-    if debug:
-        print("-" * 60)
-        print("Running test inference on input audio...")
-        with torch.no_grad():
-            # Move input_features to the same device as the model
-            input_features = input_features.to(f"cuda:{device}")
-            original_output = model.generate(input_features, max_length=100, language="english", task="transcribe")
-            original_text = processor.batch_decode(original_output, skip_special_tokens=True)[0]
-            pruned_output = pruned_model.generate(input_features, max_length=100, language="english", task="transcribe")
-            pruned_text = processor.batch_decode(pruned_output, skip_special_tokens=True)[0]
-        print(f"{'Original output:':<20} {original_text}")
-        print(f"{'Pruned output:':<20} {pruned_text}")
+    with torch.no_grad():
+        input_features = input_features.to(f"cuda:{device}")
+        original_output = model.generate(input_features, max_length=100, language="english", task="transcribe")
+        original_text = processor.batch_decode(original_output, skip_special_tokens=True)[0]
+        pruned_output = pruned_model.generate(input_features, max_length=100, language="english", task="transcribe")
+        pruned_text = processor.batch_decode(pruned_output, skip_special_tokens=True)[0]
+    print("-" * 60)
+    print(f"{'Original output:':<30} {original_text[:30]}")
+    print(f"{'Pruned output:':<30} {pruned_text[:30]}")
     
     # Calculate model size reduction
     layer_info = pruner.get_model_info()
     initial_prunable = layer_info['initial_num_prunable_params']
     final_prunable = layer_info['final_num_prunable_params']
     actual_sparsity = 1 - (final_prunable / initial_prunable)
-    print("-" * 60)
     print(f"{'Prunable weights (initial)':<30} {initial_prunable:,}")
     print(f"{'Prunable weights (final)':<30} {final_prunable:,}")
     print(f"{'Weights pruned:':<30} {initial_prunable - final_prunable:,}")
