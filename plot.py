@@ -4,10 +4,11 @@ import os
 
 # Define file paths and corresponding model names and colors
 model_files = {
-    'model_compare_result/imp_global.json': {'name': 'IMP Global', 'color': 'blue', 'marker': 'o'},
-    'model_compare_result/imp_local.json': {'name': 'IMP Local', 'color': 'green', 'marker': 's'},
-    'model_compare_result/obs_old.json': {'name': 'OBS Standard', 'color': 'red', 'marker': '^'},
-    'model_compare_result/obs_new.json': {'name': 'OBS Improved', 'color': 'purple', 'marker': 'd'}
+    'model_compare_result/tiny_obs_new.json': {'name': 'whisper-tiny', 'color': 'blue', 'marker': 'o'},
+    'model_compare_result/base_obs_new.json': {'name': 'whisper-base', 'color': 'green', 'marker': 's'},
+    'model_compare_result/small_obs_new.json': {'name': 'whisper-small', 'color': 'red', 'marker': '^'},
+    'model_compare_result/medium_obs_new.json': {'name': 'whisper-medium', 'color': 'purple', 'marker': 'd'},
+    'model_compare_result/large_obs_new.json': {'name': 'whisper-large', 'color': 'orange', 'marker': 'x'}
 }
 
 # Create plot
@@ -61,7 +62,7 @@ for file_path, model_info in model_files.items():
 # Set labels and title with larger font sizes
 plt.xlabel('Sparsity (%)', fontsize=16)
 plt.ylabel('Normalized WER (%)', fontsize=16)
-plt.title('Pruning Method Comparison for openai/whisper-tiny', fontsize=18)
+plt.title('Whisper Model Size Comparison for OBS Pruning', fontsize=18)
 
 # Set x-axis to show every 10% and set limits to hit edges
 plt.xticks(range(0, 101, 10), fontsize=14)
