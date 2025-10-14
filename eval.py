@@ -21,7 +21,7 @@ def parse_args():
     parser.add_argument("--audio", type=str, 
                         default="/datasets/speech/LibriSpeech/dev-clean/3081/166546/3081-166546-0000.flac",
                         help="Path to audio file for pruning")
-    parser.add_argument("--method", type=str, default="obs", choices=["obs", "mp_local", "mp_global", "iobs", "imp_local", "imp_global"],
+    parser.add_argument("--method", type=str, default="obs", choices=["obs", "obs_finetune", "iobs", "mp_local", "mp_global", "mp_finetune_local", "mp_finetune_global", "imp_local", "imp_global"],
                         help="Pruning method to use (default: obs)")
     parser.add_argument("--num-samples", type=int, default=100,
                         help="Number of samples for evaluation (default: 100)")
@@ -32,6 +32,28 @@ def parse_args():
     parser.add_argument("--debug", action="store_true", default=False,
                         help="Whether to print debug information (default: False)")
     return parser.parse_args()
+
+
+def count_nonzero_params(model):
+    nonzero_prunable = 0
+    total_prunable = 0
+    for name, module in model.named_modules():
+        if hasattr(module, 'weight') and isinstance(module, torch.nn.Linear):
+            nonzero_prunable += (module.weight != 0).sum().item()
+            total_prunable += module.weight.numel()
+    return nonzero_prunable, total_prunable
+
+
+def frange(start, stop, step):
+    if stop < start:
+        return [stop]
+    vals = []
+    v = start
+    while v <= stop:  
+        vals.append(round(v, 2))
+        v += step
+    return vals
+
 
 def evaluate_pruned_model(model, processor, num_samples=None, device=0, debug=False):
     """
@@ -162,6 +184,24 @@ def main():
                     device=args.device,
                     debug=args.debug
                 )
+            elif args.method == "obs_finetune":
+                pruned_model = utility_iobs_prune(
+                    model=model,
+                    processor=processor,
+                    audio_path=args.audio,
+                    sparsities=[sparsity],
+                    device=args.device,
+                    debug=args.debug
+                )
+            elif args.method == "iobs":
+                pruned_model = utility_iobs_prune(
+                    model=model,
+                    processor=processor,
+                    audio_path=args.audio,
+                    sparsities=frange(0.4, sparsity, 0.1),
+                    device=args.device,
+                    debug=args.debug
+                )
             elif args.method == "mp_local":
                 pruned_model = utility_mp_prune(
                     model=model,
@@ -182,12 +222,23 @@ def main():
                     device=args.device,
                     debug=args.debug
                 )
-            elif args.method == "iobs":
-                pruned_model = utility_iobs_prune(
+            elif args.method == "mp_finetune_local":
+                pruned_model = utility_imp_prune(
                     model=model,
                     processor=processor,
                     audio_path=args.audio,
                     sparsities=[sparsity],
+                    prune_method="local",
+                    device=args.device,
+                    debug=args.debug,
+                )
+            elif args.method == "mp_finetune_global":
+                pruned_model = utility_imp_prune(
+                    model=model,
+                    processor=processor,
+                    audio_path=args.audio,
+                    sparsities=[sparsity],
+                    prune_method="global",
                     device=args.device,
                     debug=args.debug
                 )
@@ -196,20 +247,20 @@ def main():
                     model=model,
                     processor=processor,
                     audio_path=args.audio,
-                    sparsities=[sparsity],
+                    sparsities=frange(0.3, sparsity, 0.1),
+                    prune_method="local",
                     device=args.device,
                     debug=args.debug,
-                    prune_method="local"
                 )
             elif args.method == "imp_global":
                 pruned_model = utility_imp_prune(
                     model=model,
                     processor=processor,
                     audio_path=args.audio,
-                    sparsities=[sparsity],
+                    sparsities=frange(0.3, sparsity, 0.1),
+                    prune_method="global",
                     device=args.device,
-                    debug=args.debug,
-                    prune_method="global"
+                    debug=args.debug
                 )
             else:
                 raise ValueError(f"Invalid method: {args.method}")
@@ -221,7 +272,12 @@ def main():
             device=args.device,
             debug=args.debug,
         )
-        
+
+        # Actual sparsity
+        pruned_nonzero, total_params = count_nonzero_params(pruned_model)
+        actual_sparsity = 1 - (pruned_nonzero / total_params) if total_params > 0 else 0
+        metrics['actual_sparsity'] = actual_sparsity
+
         # Clean up GPU memory
         del pruned_model
         torch.cuda.empty_cache()
@@ -230,6 +286,7 @@ def main():
         results[sparsity] = metrics
 
         print(f"{'-'*60}")
+        print(f"{'Actual sparsity:':<30} {actual_sparsity:.2%}")
         print(f"{'WER:':<30} {metrics['wer']:.2f}%")
         print(f"{'CER:':<30} {metrics['cer']:.2f}%")
         print(f"{'Normalized WER:':<30} {metrics['normalized_wer']:.2f}%")
@@ -248,14 +305,11 @@ def main():
     print("=" * 60)
     print("SUMMARY")
     print("=" * 60)
-    print(f"{'Sparsity':<10} {'WER':<8} {'CER':<8} {'Norm WER':<10} {'Norm CER':<10}")
+    print(f"{'Sparsity':<10} {'WER':<8} {'CER':<8} {'Norm WER':<10} {'Norm CER':<10} {'Actual Sparsity':<10}")
     print("-" * 60)
     
     for sparsity, metrics in results.items():
-        if "error" not in metrics:
-            print(f"{sparsity:<10.1%} {metrics['wer']:<8.2f} {metrics['cer']:<8.2f} {metrics['normalized_wer']:<10.2f} {metrics['normalized_cer']:<10.2f}")
-        else:
-            print(f"{sparsity:<10.1%} {'ERROR':<8} {'ERROR':<8} {'ERROR':<10} {'ERROR':<10}")
+        print(f"{sparsity:<10.1%} {metrics['wer']:<8.2f} {metrics['cer']:<8.2f} {metrics['normalized_wer']:<10.2f} {metrics['normalized_cer']:<10.2f} {metrics['actual_sparsity']:<10.2%}")
 
 if __name__ == "__main__":
     main()

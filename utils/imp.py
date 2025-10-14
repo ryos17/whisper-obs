@@ -32,7 +32,7 @@ def utility_imp_prune(
         model: Whisper model to prune
         processor: Whisper processor
         audio_path: Path to the calibration audio file
-        sparsities: Single sparsity level or list of sparsity levels to prune iteratively
+        sparsities: List of sparsity levels to prune iteratively
         batch_size: Batch size for pruning (default: 128)
         device: Device to run on (default: 0)
         alpha: Hyperparameter controlling the range of sparsity for mixed pruning (default: 0.03)
@@ -134,7 +134,7 @@ def utility_imp_prune(
         
     # Create a deep copy of the model to prune
     pruned_model = copy.deepcopy(model)
-    
+
     # Process each sparsity level iteratively
     for sparsity in sparsities:    
         # Apply OBS pruning for this stage
