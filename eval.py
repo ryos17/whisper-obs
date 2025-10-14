@@ -187,7 +187,7 @@ def main():
                     model=model,
                     processor=processor,
                     audio_path=args.audio,
-                    sparsities=[0.4, 0.5, 0.6, 0.7],
+                    sparsities=[sparsity],
                     device=args.device,
                     debug=args.debug
                 )
@@ -196,7 +196,7 @@ def main():
                     model=model,
                     processor=processor,
                     audio_path=args.audio,
-                    sparsities=[0.4, 0.5, 0.6, 0.7],
+                    sparsities=[sparsity],
                     device=args.device,
                     debug=args.debug,
                     prune_method="local"
@@ -206,7 +206,7 @@ def main():
                     model=model,
                     processor=processor,
                     audio_path=args.audio,
-                    sparsities=[0.4, 0.5, 0.6, 0.7],
+                    sparsities=[sparsity],
                     device=args.device,
                     debug=args.debug,
                     prune_method="global"

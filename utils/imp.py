@@ -18,6 +18,7 @@ def utility_imp_prune(
     prune_method: str = "global",
     train_batch_size: int = 8,
     eval_batch_size: int = 8,
+    warmup_steps: int = 400,
     num_cpu_workers: int = 32,
     epochs: int = 2,
     learning_rate: float = 3.75e-5,
@@ -37,6 +38,7 @@ def utility_imp_prune(
         alpha: Hyperparameter controlling the range of sparsity for mixed pruning (default: 0.03)
         train_batch_size: Batch size for fine-tuning (default: 8)
         eval_batch_size: Batch size for evaluation during fine-tuning (default: 8)
+        warmup_steps: Warmup steps for fine-tuning (default: 400)
         num_cpu_workers: Number of CPU workers for data loading (default: 32)
         epochs: Number of fine-tuning epochs after each pruning step (default: 2)
         learning_rate: Learning rate for fine-tuning (default: 3.75e-5)
@@ -95,7 +97,7 @@ def utility_imp_prune(
         per_device_train_batch_size=train_batch_size,
         gradient_accumulation_steps=1,
         learning_rate=learning_rate,
-        warmup_steps=10,
+        warmup_steps=warmup_steps,
         lr_scheduler_type="cosine",
         gradient_checkpointing=True,
         fp16=True,
