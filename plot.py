@@ -15,6 +15,11 @@ model_files = {
     'model_compare_result/tiny_obs_finetune.json': {'name': 'obs-finetune', 'color': 'green', 'marker': 's'},
     'model_compare_result/tiny_mp_global.json': {'name': 'mp-global', 'color': 'red', 'marker': '^'},
     'model_compare_result/tiny_mp_local.json': {'name': 'mp-local', 'color': 'purple', 'marker': 'd'},
+    'model_compare_result/tiny_mp_finetune_global.json': {'name': 'mp-finetune-global', 'color': 'orange', 'marker': 'x'},
+    'model_compare_result/tiny_mp_finetune_local.json': {'name': 'mp-finetune-local', 'color': 'black', 'marker': 'v'},
+  #  'model_compare_result/tiny_iobs.json': {'name': 'iobs', 'color': 'brown', 'marker': 'h'},
+  #  'model_compare_result/tiny_imp_global.json': {'name': 'imp-global', 'color': 'pink', 'marker': 's'},
+   # 'model_compare_result/tiny_imp_local.json': {'name': 'imp-local', 'color': 'gray', 'marker': 'd'},
 }
 
 # Create plot
@@ -68,7 +73,7 @@ for file_path, model_info in model_files.items():
 # Set labels and title with larger font sizes
 plt.xlabel('Sparsity (%)', fontsize=16)
 plt.ylabel('Normalized WER (%)', fontsize=16)
-plt.title('Whisper Model Comparison with OBS Finetune', fontsize=18)
+plt.title('Whisper Tiny Model Comparison with Different Pruning Methods', fontsize=18)
 
 # Set x-axis to show every 10% and set limits to hit edges
 plt.xticks(range(0, 101, 10), fontsize=14)
@@ -86,9 +91,9 @@ plt.legend(fontsize=14, loc='best')
 
 # Save plot
 plt.tight_layout()
-plt.savefig('obs_finetune_comparison.png', dpi=300, bbox_inches='tight')
+plt.savefig('model_compare_result/pruning_method_comparison.png', dpi=300, bbox_inches='tight')
 
 # Show plot
 plt.show()
 
-print("Plot saved as 'pruning_method_comparison.png'")
+print("Plot saved as 'model_compare_result/pruning_method_comparison.png'")
