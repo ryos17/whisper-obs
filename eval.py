@@ -247,7 +247,7 @@ def main():
                     model=model,
                     processor=processor,
                     audio_path=args.audio,
-                    sparsities=frange(0.3, sparsity, 0.1),
+                    sparsities=frange(0.3, sparsity, 0.05),
                     prune_method="local",
                     device=args.device,
                     debug=args.debug,
@@ -257,7 +257,7 @@ def main():
                     model=model,
                     processor=processor,
                     audio_path=args.audio,
-                    sparsities=frange(0.3, sparsity, 0.1),
+                    sparsities=frange(0.3, sparsity, 0.05),
                     prune_method="global",
                     device=args.device,
                     debug=args.debug

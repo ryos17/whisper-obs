@@ -16,10 +16,10 @@ model_files = {
     'model_compare_result/tiny_mp_global.json': {'name': 'mp-global', 'color': 'red', 'marker': '^'},
     'model_compare_result/tiny_mp_local.json': {'name': 'mp-local', 'color': 'purple', 'marker': 'd'},
     'model_compare_result/tiny_mp_finetune_global.json': {'name': 'mp-finetune-global', 'color': 'orange', 'marker': 'x'},
-    'model_compare_result/tiny_mp_finetune_local.json': {'name': 'mp-finetune-local', 'color': 'black', 'marker': 'v'},
-  #  'model_compare_result/tiny_iobs.json': {'name': 'iobs', 'color': 'brown', 'marker': 'h'},
-  #  'model_compare_result/tiny_imp_global.json': {'name': 'imp-global', 'color': 'pink', 'marker': 's'},
-   # 'model_compare_result/tiny_imp_local.json': {'name': 'imp-local', 'color': 'gray', 'marker': 'd'},
+    'model_compare_result/tiny_mp_finetune_local.json': {'name': 'mp-finetune-local', 'color': 'gray', 'marker': 'v'},
+    'model_compare_result/tiny_iobs.json': {'name': 'iobs', 'color': 'black', 'marker': 'h'},
+    # 'model_compare_result/tiny_imp_global.json': {'name': 'imp-global', 'color': 'pink', 'marker': 's'},
+    'model_compare_result/tiny_imp_local.json': {'name': 'imp-local', 'color': 'darkgreen', 'marker': 'd'},
 }
 
 # Create plot
@@ -43,10 +43,12 @@ for file_path, model_info in model_files.items():
         
         for sparsity_str, metrics in results.items():
             sparsity = float(sparsity_str) * 100  # Convert to percentage
-            norm_wer = min(metrics['normalized_wer'], 100)  # Cap at 100
-            
-            sparsities.append(sparsity)
-            normalized_wers.append(norm_wer)
+            # Only include sparsity values that are multiples of 10%
+            if sparsity % 10 == 0:
+                norm_wer = min(metrics['normalized_wer'], 100)  # Cap at 100
+                
+                sparsities.append(sparsity)
+                normalized_wers.append(norm_wer)
         
         # Sort by sparsity to ensure the line is drawn correctly
         sorted_data = sorted(zip(sparsities, normalized_wers))
