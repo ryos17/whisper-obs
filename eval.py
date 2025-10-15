@@ -1,5 +1,6 @@
 import json
 import argparse
+import random
 import torch
 import copy
 from tqdm import tqdm
@@ -12,18 +13,19 @@ from utils.mp import utility_mp_prune
 from utils.iobs import utility_iobs_prune
 from utils.imp import utility_imp_prune
 
+random.seed(42)
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate pruned Whisper models at different sparsity levels")
     parser.add_argument("--model", type=str, default="openai/whisper-tiny", 
                         help="Whisper model name or path (default: openai/whisper-tiny)")
     parser.add_argument("--output", type=str, default="obs_results.json",
                         help="Path to save results JSON file (default: obs_results.json)")
-    parser.add_argument("--audio", type=str, 
-                        default="/datasets/speech/LibriSpeech/dev-clean/3081/166546/3081-166546-0000.flac",
-                        help="Path to audio file for pruning")
     parser.add_argument("--method", type=str, default="obs", choices=["obs", "obs_finetune", "iobs", "mp_local", "mp_global", "mp_finetune_local", "mp_finetune_global", "imp_local", "imp_global"],
                         help="Pruning method to use (default: obs)")
-    parser.add_argument("--num-samples", type=int, default=100,
+    parser.add_argument("--num-calibration-samples", type=int, default=2048,
+                        help="Number of samples for calibration (default: 2048)")
+    parser.add_argument("--num-evaluation-samples", type=int, default=100,
                         help="Number of samples for evaluation (default: 100)")
     parser.add_argument("--device", type=int, default=0,
                         help="GPU device ID to use (default: 0)")
@@ -37,7 +39,7 @@ def parse_args():
 def count_nonzero_params(model):
     nonzero_prunable = 0
     total_prunable = 0
-    for name, module in model.named_modules():
+    for _, module in model.named_modules():
         if hasattr(module, 'weight') and isinstance(module, torch.nn.Linear):
             nonzero_prunable += (module.weight != 0).sum().item()
             total_prunable += module.weight.numel()
@@ -159,138 +161,190 @@ def main():
     model = WhisperForConditionalGeneration.from_pretrained(args.model)
     processor = WhisperProcessor.from_pretrained(args.model)
 
+    # Load calibration samples if needed
+    if args.method in ["obs", "obs_finetune", "iobs"]:
+        # Load all audio paths from train-clean-100
+        with open("custom_data/LibriSpeech/train-clean-100/audio_paths", "r") as f:
+            all_audio_paths = [line.strip().split(" ", 1)[1] for line in f.readlines()]
+        calibration_audio_paths = random.sample(all_audio_paths, args.num_calibration_samples)
+
+        # Process all calibration samples in a single batch
+        all_audio_data = []
+        for audio_path in tqdm(calibration_audio_paths, desc="Loading calibration samples"):
+            audio, _ = torchaudio.load(audio_path)
+            all_audio_data.append(audio.squeeze().numpy())
+        
+        # Process all audio samples in a single batch through Whisper processor
+        input_features = processor(all_audio_data, sampling_rate=16000, return_tensors="pt").input_features
+    
     # Define sparsity levels to test
     sparsities = [float(s) for s in args.sparsities.split(",")]
-    
-    # Results dictionary
     results = {}
+    print(f"Evaluating {sparsities} sparsity levels with {args.method} method...")
     
-    print(f"Evaluating {len(sparsities)} sparsity levels using {args.method} method...")
-    
-    for sparsity in sparsities:
-        print("=" * 60)
-        print(f"{f'Sparsity: {sparsity:.1%}':^60}")
-        
-        # Prune model
-        if sparsity == 0.0:
-            pruned_model = copy.deepcopy(model)
-        else:
-            if args.method == "obs":
-                pruned_model = utility_obs_prune(
-                    model=model,
-                    processor=processor,
-                    audio_path=args.audio,
-                    sparsity=sparsity,
-                    device=args.device,
-                    debug=args.debug
-                )
-            elif args.method == "obs_finetune":
-                pruned_model = utility_iobs_prune(
-                    model=model,
-                    processor=processor,
-                    audio_path=args.audio,
-                    sparsities=[sparsity],
-                    device=args.device,
-                    debug=args.debug
-                )
-            elif args.method == "iobs":
-                pruned_model = utility_iobs_prune(
-                    model=model,
-                    processor=processor,
-                    audio_path=args.audio,
-                    sparsities=frange(0.4, sparsity, 0.1),
-                    device=args.device,
-                    debug=args.debug
-                )
-            elif args.method == "mp_local":
-                pruned_model = utility_mp_prune(
-                    model=model,
-                    processor=processor,
-                    audio_path=args.audio,
-                    sparsity=sparsity,
-                    prune_method="local",
-                    device=args.device,
-                    debug=args.debug
-                )
-            elif args.method == "mp_global":
-                pruned_model = utility_mp_prune(
-                    model=model,
-                    processor=processor,
-                    audio_path=args.audio,
-                    sparsity=sparsity,
-                    prune_method="global",
-                    device=args.device,
-                    debug=args.debug
-                )
-            elif args.method == "mp_finetune_local":
-                pruned_model = utility_imp_prune(
-                    model=model,
-                    processor=processor,
-                    audio_path=args.audio,
-                    sparsities=[sparsity],
-                    prune_method="local",
-                    device=args.device,
-                    debug=args.debug,
-                )
-            elif args.method == "mp_finetune_global":
-                pruned_model = utility_imp_prune(
-                    model=model,
-                    processor=processor,
-                    audio_path=args.audio,
-                    sparsities=[sparsity],
-                    prune_method="global",
-                    device=args.device,
-                    debug=args.debug
-                )
-            elif args.method == "imp_local":
-                pruned_model = utility_imp_prune(
-                    model=model,
-                    processor=processor,
-                    audio_path=args.audio,
-                    sparsities=frange(0.3, sparsity, 0.05),
-                    prune_method="local",
-                    device=args.device,
-                    debug=args.debug,
-                )
-            elif args.method == "imp_global":
-                pruned_model = utility_imp_prune(
-                    model=model,
-                    processor=processor,
-                    audio_path=args.audio,
-                    sparsities=frange(0.3, sparsity, 0.05),
-                    prune_method="global",
-                    device=args.device,
-                    debug=args.debug
-                )
+    # Start evaluation loop for non iterative methods
+    if args.method in ["obs", "obs_finetune", "mp_local", "mp_global", "mp_finetune_local", "mp_finetune_global"]:
+        for sparsity in sparsities:
+            print("=" * 60)
+            print(f"{f'Sparsity: {sparsity:.1%}':^60}")
+            
+            # Prune model
+            if sparsity == 0.0:
+                pruned_model = copy.deepcopy(model)
             else:
-                raise ValueError(f"Invalid method: {args.method}")
+                if args.method == "obs":
+                    pruned_model = utility_obs_prune(
+                        model=model,
+                        processor=processor,
+                        sparsity=sparsity,
+                        input_features=input_features,
+                        device=args.device,
+                        debug=args.debug
+                    )
+                elif args.method == "obs_finetune":
+                    pruned_model = utility_iobs_prune(
+                        model=model,
+                        processor=processor,
+                        sparsities=[sparsity],
+                        input_features=input_features,
+                        device=args.device,
+                        debug=args.debug
+                    )
+                elif args.method == "mp_local":
+                    pruned_model = utility_mp_prune(
+                        model=model,
+                        processor=processor,
+                        sparsity=sparsity,
+                        prune_method="local",
+                        device=args.device,
+                        debug=args.debug
+                    )
+                elif args.method == "mp_global":
+                    pruned_model = utility_mp_prune(
+                        model=model,
+                        processor=processor,
+                        sparsity=sparsity,
+                        prune_method="global",
+                        device=args.device,
+                        debug=args.debug
+                    )
+                elif args.method == "mp_finetune_local":
+                    pruned_model = utility_imp_prune(
+                        model=model,
+                        processor=processor,
+                        sparsities=[sparsity],
+                        prune_method="local",
+                        device=args.device,
+                        debug=args.debug,
+                    )
+                elif args.method == "mp_finetune_global":
+                    pruned_model = utility_imp_prune(
+                        model=model,
+                        processor=processor,
+                        sparsities=[sparsity],
+                        prune_method="global",
+                        device=args.device,
+                        debug=args.debug
+                    )
 
-        metrics = evaluate_pruned_model(
-            model=pruned_model,
-            processor=processor,
-            num_samples=args.num_samples,
-            device=args.device,
-            debug=args.debug,
-        )
+            # Evaluate pruned model
+            metrics = evaluate_pruned_model(
+                model=pruned_model,
+                processor=processor,
+                num_samples=args.num_evaluation_samples,
+                device=args.device,
+                debug=args.debug,
+            )
 
-        # Actual sparsity
-        pruned_nonzero, total_params = count_nonzero_params(pruned_model)
-        actual_sparsity = 1 - (pruned_nonzero / total_params) if total_params > 0 else 0
-        metrics['actual_sparsity'] = actual_sparsity
+            # Actual sparsity
+            pruned_nonzero, total_params = count_nonzero_params(pruned_model)
+            actual_sparsity = 1 - (pruned_nonzero / total_params) if total_params > 0 else 0
+            metrics['actual_sparsity'] = actual_sparsity
 
-        # Clean up GPU memory
-        del pruned_model
-        torch.cuda.empty_cache()
+            # Clean up GPU memory
+            del pruned_model
+            torch.cuda.empty_cache()
+            
+            # Store results
+            results[sparsity] = metrics
+
+            print(f"{'-'*60}")
+            print(f"{'Actual sparsity:':<30} {actual_sparsity:.2%}")
+            print(f"{'WER:':<30} {metrics['wer']:.2f}%")
+            print(f"{'CER:':<30} {metrics['cer']:.2f}%")
+            print(f"{'Normalized WER:':<30} {metrics['normalized_wer']:.2f}%")
+            print(f"{'Normalized CER:':<30} {metrics['normalized_cer']:.2f}%")
+
+    elif args.method in ["iobs", "imp_local", "imp_global"]:
         
-        # Store results
-        results[sparsity] = metrics
 
-        print(f"{'-'*60}")
-        print(f"{'Actual sparsity:':<30} {actual_sparsity:.2%}")
-        print(f"{'WER:':<30} {metrics['wer']:.2f}%")
-        print(f"{'CER:':<30} {metrics['cer']:.2f}%")
-        print(f"{'Normalized WER:':<30} {metrics['normalized_wer']:.2f}%")
-        print(f"{'Normalized CER:':<30} {metrics['normalized_cer']:.2f}%")
+
+
+
+
+
+        for sparsity in sparsities:
+            print("=" * 60)
+            print(f"{f'Sparsity: {sparsity:.1%}':^60}")
+            
+            # Prune model
+            if sparsity == 0.0:
+                pruned_model = copy.deepcopy(model)
+            else:
+                if args.method == "iobs":
+                    pruned_model = utility_iobs_prune(
+                        model=model,
+                        processor=processor,
+                        sparsity=sparsity,
+                        input_features=input_features,
+                        device=args.device,
+                        debug=args.debug
+                    )
+                elif args.method == "imp_local":
+                    pruned_model = utility_imp_prune(
+                        model=model,
+                        processor=processor,
+                        sparsities=frange(0.3, sparsity, 0.05),
+                        prune_method="local",
+                        device=args.device,
+                        debug=args.debug,
+                    )
+                elif args.method == "imp_global":
+                    pruned_model = utility_imp_prune(
+                        model=model,
+                        processor=processor,
+                        sparsities=frange(0.3, sparsity, 0.05),
+                        prune_method="global",
+                        device=args.device,
+                        debug=args.debug
+                    )
+
+            metrics = evaluate_pruned_model(
+                model=pruned_model,
+                processor=processor,
+                num_samples=args.num_evaluation_samples,
+                device=args.device,
+                debug=args.debug,
+            )
+
+            # Actual sparsity
+            pruned_nonzero, total_params = count_nonzero_params(pruned_model)
+            actual_sparsity = 1 - (pruned_nonzero / total_params) if total_params > 0 else 0
+            metrics['actual_sparsity'] = actual_sparsity
+
+            # Clean up GPU memory
+            del pruned_model
+            torch.cuda.empty_cache()
+            
+            # Store results
+            results[sparsity] = metrics
+
+            print(f"{'-'*60}")
+            print(f"{'Actual sparsity:':<30} {actual_sparsity:.2%}")
+            print(f"{'WER:':<30} {metrics['wer']:.2f}%")
+            print(f"{'CER:':<30} {metrics['cer']:.2f}%")
+            print(f"{'Normalized WER:':<30} {metrics['normalized_wer']:.2f}%")
+            print(f"{'Normalized CER:':<30} {metrics['normalized_cer']:.2f}%")
 
     # Save results to JSON
     output_file = args.output

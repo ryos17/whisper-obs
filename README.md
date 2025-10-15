@@ -15,7 +15,6 @@ from utils.obs import utility_obs_prune
 pruned_model = utility_obs_prune(
     model=model,
     processor=processor,
-    audio_path=audio_path,
     sparsity=0.3,
     device=0,
     alpha=0.03  # Controls mixed sparsity range

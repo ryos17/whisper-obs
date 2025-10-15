@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.utils.prune as prune
 import torchaudio
 import copy
+import random
 from tqdm import tqdm
 from typing import Dict, List, Optional
 from transformers import WhisperForConditionalGeneration, WhisperProcessor
@@ -464,12 +465,12 @@ class WhisperOBSPruner:
 def utility_obs_prune(
     model: WhisperForConditionalGeneration,
     processor: WhisperProcessor,
-    audio_path: str,
     sparsity: float,
-    batch_size: int = 128,
+    input_features: torch.Tensor,
+    hessian_batch_size: int = 128,
+    pruning_batch_size: int = 128,
     device: int = 0,
     debug: bool = False,
-    alpha: float = 0.03,
 ):
     """
     Prune a Whisper model using the Optimal Brain Surgeon algorithm.
@@ -477,55 +478,49 @@ def utility_obs_prune(
     Args:
         model: Whisper model to prune
         processor: Whisper processor
-        audio_path: Path to the calibration audio file
         sparsity: Sparsity level to prune
-        batch_size: Batch size for pruning (default: 128)
+        input_features: Input features for calibration
+        hessian_batch_size: Batch size for Hessian computation (default: 128)
+        pruning_batch_size: Batch size for pruning (default: 128)
         device: Device to run on (default: 0)
         debug: Whether to print debug information (default: False)
-        alpha: Hyperparameter controlling the range of sparsity for mixed pruning (default: 0.03)
     """
-    # Load and processsample audio
-    if debug:
-        print("-" * 60)
-        print("Loading sample audio...")
-    audio, _ = torchaudio.load(audio_path)
-    inputs = processor(audio.squeeze().numpy(), sampling_rate=16000, return_tensors="pt")
-    input_features = inputs.input_features
-    
     # Create OBS pruner
     if debug:
         print("-" * 60)
         print("Setting up OBS pruner...")
-    model = model.to(f"cuda:{device}")
     pruned_model = copy.deepcopy(model)
+    pruned_model = pruned_model.to(f"cuda:{device}")
     pruner = WhisperOBSPruner(pruned_model, device=device, debug=debug)
     
-    # Run forward pass to collect data
+    # Run forward pass to collect data in batches, accumulating data properly
     if debug:
-        print("-" * 60)
-        print("Collecting data for Hessian computation...")
+        print(f"Processing {len(input_features)} calibration samples")
     with torch.no_grad():
-        # Move input_features to the same device as the model
-        input_features = input_features.to(f"cuda:{device}")
+        input_features = input_features.to(f"cuda:{device}")    # Move to GPU
         _ = pruned_model.generate(input_features, max_length=100, language="english", task="transcribe")
     
     # Accumulate Hessian matrices
     if debug:
         print("-" * 60)
         print("Accumulating Hessian matrices...")
-    pruner.accumulate_hessian(max_samples=100, batch_size=batch_size)
+    pruner.accumulate_hessian(max_samples=100, batch_size=hessian_batch_size)
     
     # Prune the model
     if debug:
         print("-" * 60)
         print("Pruning model...")
-    pruner.prune_model(sparsity, batch_size=batch_size, alpha=alpha)
+    pruner.prune_model(sparsity, batch_size=pruning_batch_size)
 
-    # Test both models
+    # Test both models with a single sample for comparison
     with torch.no_grad():
-        original_output = model.generate(input_features, max_length=100, language="english", task="transcribe")
+        # Use the first sample and move to GPU
+        test_input = input_features[:1].to(f"cuda:{device}")
+        model = model.to(f"cuda:{device}")
+        # Generate and decode output
+        original_output = model.generate(test_input, max_length=100, language="english", task="transcribe")
         original_text = processor.batch_decode(original_output, skip_special_tokens=True)[0]
-        pruned_output = pruned_model.generate(input_features, max_length=100, language="english", task="transcribe")
+        pruned_output = pruned_model.generate(test_input, max_length=100, language="english", task="transcribe")
         pruned_text = processor.batch_decode(pruned_output, skip_special_tokens=True)[0]
     print("-" * 60)
     print(f"{'Original output:':<30} {original_text[:30]}")
