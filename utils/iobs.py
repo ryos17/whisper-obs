@@ -5,20 +5,16 @@ from typing import Any, Dict, List, Union
 from transformers import WhisperForConditionalGeneration, WhisperProcessor, Seq2SeqTrainer, Seq2SeqTrainingArguments
 from utils.obs import utility_obs_prune
 from datasets import load_from_disk, Audio
-import evaluate
 from transformers.models.whisper.english_normalizer import BasicTextNormalizer
 
 
 def utility_iobs_prune(
     model: WhisperForConditionalGeneration,
     processor: WhisperProcessor,
-    audio_path: str,
+    input_features: torch.Tensor,
     sparsities: List[float],
-    batch_size: int = 128,
     device: int = 0,
-    alpha: float = 0.03,
     train_batch_size: int = 8,
-    eval_batch_size: int = 8,
     warmup_steps: int = 400,
     num_cpu_workers: int = 32,
     epochs: int = 2,
@@ -32,13 +28,10 @@ def utility_iobs_prune(
     Args:
         model: Whisper model to prune
         processor: Whisper processor
-        audio_path: Path to the calibration audio file
+        input_features: Input features for calibration
         sparsities: List of sparsity levels to prune iteratively
-        batch_size: Batch size for pruning (default: 128)
         device: Device to run on (default: 0)
-        alpha: Hyperparameter controlling the range of sparsity for mixed pruning (default: 0.03)
         train_batch_size: Batch size for fine-tuning (default: 64)
-        eval_batch_size: Batch size for evaluation during fine-tuning (default: 64)
         warmup_steps: Warmup steps for fine-tuning (default: 50)
         num_cpu_workers: Number of CPU workers for data loading (default: 32)
         epochs: Number of fine-tuning epochs after each pruning step (default: 2)
@@ -48,15 +41,12 @@ def utility_iobs_prune(
     Returns:
         Pruned model
     """
-    # Hardcoded paths for fine-tuning
+    # Hardcoded path for fine-tuning
     finetune_dataset_path = "librispeech/train-clean-100"
-    eval_dataset_path = "librispeech/dev-clean"
 
-    # Load the fine-tuning datasets
+    # Load the fine-tuning dataset
     train_dataset = load_from_disk(finetune_dataset_path)
-    eval_dataset = load_from_disk(eval_dataset_path)
     train_dataset = train_dataset.cast_column("audio", Audio(sampling_rate=16000))
-    eval_dataset = eval_dataset.cast_column("audio", Audio(sampling_rate=16000))
     whisper_norm = BasicTextNormalizer()
 
     # Processing and prepare_dataset
@@ -73,7 +63,6 @@ def utility_iobs_prune(
         return batch
 
     train_dataset = train_dataset.map(prepare_dataset, num_proc=num_cpu_workers)
-    eval_dataset = eval_dataset.map(prepare_dataset, num_proc=num_cpu_workers)
     
     @dataclass
     class DataCollatorSpeechSeq2SeqWithPadding:
@@ -102,36 +91,15 @@ def utility_iobs_prune(
         lr_scheduler_type="cosine",
         gradient_checkpointing=True,
         fp16=True,
-        evaluation_strategy="epoch",
-        save_strategy="epoch",
+        evaluation_strategy="no",
+        save_strategy="no",
         num_train_epochs=epochs,
-        per_device_eval_batch_size=eval_batch_size,
-        predict_with_generate=True,
-        generation_max_length=100,
         logging_steps=500,
         report_to=["tensorboard"],
-        load_best_model_at_end=True,
-        metric_for_best_model="wer",
-        greater_is_better=False,
         optim="adamw_bnb_8bit",
         dataloader_num_workers=num_cpu_workers,
     )
 
-    # Define metrics
-    metric = evaluate.load("wer")
-    def compute_metrics(pred):
-        pred_ids = pred.predictions
-        label_ids = pred.label_ids
-
-        # replace -100 with the pad_token_id
-        label_ids[label_ids == -100] = processor.tokenizer.pad_token_id
-
-        # we do not want to group tokens when computing the metrics
-        pred_str = processor.tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
-        label_str = processor.tokenizer.batch_decode(label_ids, skip_special_tokens=True)
-
-        wer = 100 * metric.compute(predictions=pred_str, references=label_str)
-        return {"wer": wer}
         
     # Create a deep copy of the model to prune
     pruned_model = copy.deepcopy(model)
@@ -142,12 +110,10 @@ def utility_iobs_prune(
         pruned_model = utility_obs_prune(
             pruned_model,
             processor,
-            audio_path,
             sparsity,
-            batch_size=batch_size,
+            input_features,
             device=device,
             debug=debug,
-            alpha=alpha
         )
 
         # Fine-tune the pruned model
@@ -155,9 +121,7 @@ def utility_iobs_prune(
             args=training_args,
             model=pruned_model,
             train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
             data_collator=data_collator,
-            compute_metrics=compute_metrics,
             tokenizer=processor.feature_extractor,
         )
 

@@ -1,11 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.utils.prune as prune
-import torchaudio
 import copy
-import random
 from tqdm import tqdm
-from typing import Dict, List, Optional
+from typing import Dict
 from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
 
@@ -73,20 +71,19 @@ class WhisperOBSPruner:
                 if self.debug:
                     print(f"\tRegistered hook for {name}")
     
-    def accumulate_hessian(self, max_samples: int = 1000, batch_size: int = 32):
+    def accumulate_hessian(self, batch_size: int):
         """
         Accumulate diagonal Hessian matrices for all Linear layers.
         
         Args:
-            max_samples: Maximum number of input vector samples to use for Hessian computation (default: 1000)
-            batch_size: Batch size for Hessian computation (default: 32)
+            batch_size: Batch size for Hessian computation
         """
-        for name, data in self.obs_data.items():
+        for name, data in tqdm(self.obs_data.items(), desc="Accumulating Hessian matrices", leave=False):
             if not data['inputs']:
                 continue
                 
             layer = data['layer']
-            inputs = torch.cat(data['inputs'][:max_samples], dim=0)
+            inputs = torch.cat(data['inputs'], dim=0)
             
             # Get weight matrix
             W = layer.weight.data
@@ -171,15 +168,14 @@ class WhisperOBSPruner:
         
         return gradients
         
-    def _estimate_hessian_trace(self, layer_name: str, num_samples: int = 5, batch_size: int = 200, chunk_size: int = 50) -> float:
+    def _estimate_hessian_trace(self, layer_name: str, batch_size: int, num_samples: int) -> float:
         """
         Estimate the trace of the Hessian matrix for a layer using the Hutchinson algorithm.
         
-        Args:
+        Args:   
             layer_name: Name of the layer
+            batch_size: Size of batches for processing
             num_samples: Number of random vectors to use for estimation
-            batch_size: Size of input batches for processing
-            chunk_size: Size of row chunks for processing
             
         Returns:
             Estimated trace of the Hessian matrix normalized by parameter count (sensitivity)
@@ -203,8 +199,8 @@ class WhisperOBSPruner:
                 actual_batch_size = batch_inputs.shape[0]
                 
                 # Process in chunks to handle large layers
-                for chunk_start in range(0, rows, chunk_size):
-                    chunk_end = min(chunk_start + chunk_size, rows)
+                for chunk_start in range(0, rows, batch_size):
+                    chunk_end = min(chunk_start + batch_size, rows)
                     z_chunk = z[chunk_start:chunk_end, :]
                     
             
@@ -222,13 +218,14 @@ class WhisperOBSPruner:
         
         return sensitivity
         
-    def compute_layer_sensitivities(self, num_samples: int = 5) -> Dict[str, float]:
+    def compute_layer_sensitivities(self, batch_size: int, num_samples: int = 4) -> Dict[str, float]:
         """
         Compute the sensitivity of each layer based on the trace of its Hessian.
         Optimized version with progress bar and reduced samples.
         
         Args:
-            num_samples: Number of random vectors to use for Hessian trace estimation (default: 5)
+            batch_size: Batch size for Hessian trace estimation
+            num_samples: Number of random vectors to use for Hessian trace estimation (default: 4)
             
         Returns:
             Dictionary mapping layer names to sensitivity values
@@ -239,7 +236,7 @@ class WhisperOBSPruner:
         layer_names = list(self.obs_data.keys())
         
         for layer_name in tqdm(layer_names, desc="Computing layer sensitivities", leave=False):
-            sensitivity = self._estimate_hessian_trace(layer_name, num_samples)
+            sensitivity = self._estimate_hessian_trace(layer_name, batch_size, num_samples)
             sensitivities[layer_name] = sensitivity
             
             if self.debug:
@@ -247,19 +244,20 @@ class WhisperOBSPruner:
                 
         return sensitivities
         
-    def compute_mixed_sparsities(self, target_sparsity: float, alpha: float = 0.03) -> Dict[str, float]:
+    def compute_mixed_sparsities(self, target_sparsity: float, batch_size: int, alpha: float = 0.03) -> Dict[str, float]:
         """
         Compute mixed sparsity levels for each layer based on their sensitivities.
         
         Args:
             target_sparsity: Target overall sparsity
+            batch_size: Batch size for Hessian trace estimation
             alpha: Hyperparameter controlling the range of sparsity (default: 0.03)
             
         Returns:
             Dictionary mapping layer names to sparsity values
         """
         # Compute sensitivities
-        sensitivities = self.compute_layer_sensitivities()
+        sensitivities = self.compute_layer_sensitivities(batch_size)
         
         # Sort layers by sensitivity (higher sensitivity = lower rank = lower sparsity)
         sorted_layers = sorted(sensitivities.items(), key=lambda x: x[1], reverse=True)
@@ -300,16 +298,17 @@ class WhisperOBSPruner:
             
         return sparsities
     
-    def prune_layer(self, layer_name: str, sparsity: float, rel_damp: float = 1e-4, min_value: float = 1e-8, batch_size: int = 32) -> None:
+    def prune_layer(self, layer_name: str, sparsity: float, batch_size: int, rel_damp: float = 1e-4, min_value: float = 1e-8) -> None:
         """
         Prune a single Linear layer using improved OBS algorithm.
         
         Args:
             layer_name: Name of the layer to prune
             sparsity: Target sparsity (fraction of weights to remove)
+            batch_size: Batch size for pruning
             rel_damp: Relative damping factor for numerical stability when inverting the Hessian (default: 1e-4)
             min_value: Minimum value for the diagonal Hessian (default: 1e-8)
-            batch_size: Batch size for pruning (default: 32)
+            batch_size: Batch size for pruning
         """    
         data = self.obs_data[layer_name]
         H_diag = data['hessian_diag']
@@ -409,20 +408,18 @@ class WhisperOBSPruner:
             sparsity_achieved = 1.0 - (num_nonzero / total_mask_elements)
             print(f"\tSparsity achieved: {sparsity_achieved:.4f}")
     
-    def prune_model(self, sparsity: float, target_layers: Optional[List[str]] = None, batch_size: int = 32, alpha: float = 0.03) -> None:
+    def prune_model(self, sparsity: float, batch_size: int, alpha: float = 0.03) -> None:
         """
         Prune multiple layers in the model using mixed sparsity pruning.
         
         Args:
             sparsity: Target sparsity for all layers
-            target_layers: List of layer names to prune. If None, prunes all Linear layers.
-            batch_size: Batch size for pruning (default: 32)
+            batch_size: Batch size for pruning
             alpha: Hyperparameter controlling the range of sparsity for mixed pruning (default: 0.03)
         """
-        if target_layers is None:
-            target_layers = list(self.obs_data.keys())
-        
-        layer_sparsities = self.compute_mixed_sparsities(sparsity, alpha)
+        target_layers = list(self.obs_data.keys())
+
+        layer_sparsities = self.compute_mixed_sparsities(sparsity, batch_size, alpha)
 
         # Prune each layer with its assigned sparsity
         if self.debug:
@@ -467,8 +464,7 @@ def utility_obs_prune(
     processor: WhisperProcessor,
     sparsity: float,
     input_features: torch.Tensor,
-    hessian_batch_size: int = 128,
-    pruning_batch_size: int = 128,
+    batch_size: int = 20000,
     device: int = 0,
     debug: bool = False,
 ):
@@ -480,8 +476,7 @@ def utility_obs_prune(
         processor: Whisper processor
         sparsity: Sparsity level to prune
         input_features: Input features for calibration
-        hessian_batch_size: Batch size for Hessian computation (default: 128)
-        pruning_batch_size: Batch size for pruning (default: 128)
+        batch_size: Batch size for pruning (default: 8192)
         device: Device to run on (default: 0)
         debug: Whether to print debug information (default: False)
     """
@@ -504,24 +499,24 @@ def utility_obs_prune(
     if debug:
         print("-" * 60)
         print("Accumulating Hessian matrices...")
-    pruner.accumulate_hessian(max_samples=100, batch_size=hessian_batch_size)
+    pruner.accumulate_hessian(batch_size=batch_size)
     
     # Prune the model
     if debug:
         print("-" * 60)
         print("Pruning model...")
-    pruner.prune_model(sparsity, batch_size=pruning_batch_size)
+    pruner.prune_model(sparsity, batch_size=batch_size)
 
     # Test both models with a single sample for comparison
     with torch.no_grad():
-        # Use the first sample and move to GPU
-        test_input = input_features[:1].to(f"cuda:{device}")
+        # Move to GPU
         model = model.to(f"cuda:{device}")
         # Generate and decode output
-        original_output = model.generate(test_input, max_length=100, language="english", task="transcribe")
+        original_output = model.generate(input_features[:1], max_length=100, language="english", task="transcribe")
         original_text = processor.batch_decode(original_output, skip_special_tokens=True)[0]
-        pruned_output = pruned_model.generate(test_input, max_length=100, language="english", task="transcribe")
+        pruned_output = pruned_model.generate(input_features[:1], max_length=100, language="english", task="transcribe")
         pruned_text = processor.batch_decode(pruned_output, skip_special_tokens=True)[0]
+
     print("-" * 60)
     print(f"{'Original output:':<30} {original_text[:30]}")
     print(f"{'Pruned output:':<30} {pruned_text[:30]}")
@@ -530,11 +525,17 @@ def utility_obs_prune(
     layer_info = pruner.get_model_info()
     initial_prunable = layer_info['initial_num_prunable_params']
     final_prunable = layer_info['final_num_prunable_params']
-    actual_sparsity = 1 - (final_prunable / initial_prunable)
+    calculated_sparsity = 1 - (final_prunable / initial_prunable)
     print(f"{'Prunable weights (initial)':<30} {initial_prunable:,}")
     print(f"{'Prunable weights (final)':<30} {final_prunable:,}")
     print(f"{'Weights pruned:':<30} {initial_prunable - final_prunable:,}")
-    print(f"{'Actual sparsity:':<30} {actual_sparsity:.2%}")
+    print(f"{'Calculated sparsity:':<30} {calculated_sparsity:.2%}")
+    
+    # Move everything back to CPU
+    model = model.to("cpu")
+    pruned_model = pruned_model.to("cpu")
+    input_features = input_features.to("cpu")
+    torch.cuda.empty_cache()
     
     # Cleanup
     if debug:

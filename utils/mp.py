@@ -250,8 +250,8 @@ class WhisperMPPruner:
 def utility_mp_prune(
     model: WhisperForConditionalGeneration,
     processor: WhisperProcessor,
-    audio_path: str,
     sparsity: float,
+    audio_path: str = "/datasets/speech/LibriSpeech/dev-clean/3081/166546/3081-166546-0000.flac",
     prune_method: str = "global",
     device: int = 0,
     debug: bool = False,
@@ -262,8 +262,8 @@ def utility_mp_prune(
     Args:
         model: Whisper model to prune
         processor: Whisper processor
-        audio_path: Path to the calibration audio file
         sparsity: Sparsity level to prune
+        audio_path: Audio path to test the model
         prune_method: Pruning method, either "global" or "local" (default: "global")
         device: Device to run on (default: 0)
         debug: Whether to print debug information (default: False)
@@ -271,22 +271,14 @@ def utility_mp_prune(
     Returns:
         Pruned model
     """    
-    # Load and process sample audio
-    if debug:
-        print("-" * 60)
-        print("Loading sample audio...")
-    audio, _ = torchaudio.load(audio_path)
-    inputs = processor(audio.squeeze().numpy(), sampling_rate=16000, return_tensors="pt")
-    input_features = inputs.input_features
-    
     # Create MP pruner
     if debug:
         print("-" * 60)
         print("Setting up MP pruner...")
-    model = model.to(f"cuda:{device}")
     pruned_model = copy.deepcopy(model)
+    pruned_model = pruned_model.to(f"cuda:{device}")
     pruner = WhisperMPPruner(pruned_model, device=device, debug=debug)
-    
+
     # Prune the model
     if debug:
         print("-" * 60)
@@ -298,7 +290,13 @@ def utility_mp_prune(
     
     # Test both models
     with torch.no_grad():
+        # Load and process sample audio
+        audio, _ = torchaudio.load(audio_path)
+        input_features = processor(audio.squeeze().numpy(), sampling_rate=16000, return_tensors="pt").input_features
+        # Move to GPU
         input_features = input_features.to(f"cuda:{device}")
+        model = model.to(f"cuda:{device}")
+        # Generate and decode output
         original_output = model.generate(input_features, max_length=100, language="english", task="transcribe")
         original_text = processor.batch_decode(original_output, skip_special_tokens=True)[0]
         pruned_output = pruned_model.generate(input_features, max_length=100, language="english", task="transcribe")
@@ -311,17 +309,23 @@ def utility_mp_prune(
     layer_info = pruner.get_model_info()
     initial_prunable = layer_info['initial_num_prunable_params']
     final_prunable = layer_info['final_num_prunable_params']
-    actual_sparsity = 1 - (final_prunable / initial_prunable)
+    calculated_sparsity = 1 - (final_prunable / initial_prunable)
     print(f"{'Prunable weights (initial)':<30} {initial_prunable:,}")
     print(f"{'Prunable weights (final)':<30} {final_prunable:,}")
     print(f"{'Weights pruned:':<30} {initial_prunable - final_prunable:,}")
-    print(f"{'Actual sparsity:':<30} {actual_sparsity:.2%}")
+    print(f"{'Calculated sparsity:':<30} {calculated_sparsity:.2%}")
     
     # Cleanup
     if debug:
         print("-" * 60)
         print("Cleanup and finishing...")
     pruner.cleanup()
+
+    # Move everything back to CPU
+    model = model.to("cpu")
+    pruned_model = pruned_model.to("cpu")
+    input_features = input_features.to("cpu")
+    torch.cuda.empty_cache()
     
     # Return the pruned model
     return pruned_model

@@ -6,6 +6,7 @@ import copy
 from tqdm import tqdm
 import evaluate
 import torchaudio
+import time
 from transformers.models.whisper.english_normalizer import BasicTextNormalizer
 from transformers import WhisperForConditionalGeneration, WhisperProcessor
 from utils.obs import utility_obs_prune
@@ -13,7 +14,9 @@ from utils.mp import utility_mp_prune
 from utils.iobs import utility_iobs_prune
 from utils.imp import utility_imp_prune
 
+
 random.seed(42)
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate pruned Whisper models at different sparsity levels")
@@ -23,8 +26,8 @@ def parse_args():
                         help="Path to save results JSON file (default: obs_results.json)")
     parser.add_argument("--method", type=str, default="obs", choices=["obs", "obs_finetune", "iobs", "mp_local", "mp_global", "mp_finetune_local", "mp_finetune_global", "imp_local", "imp_global"],
                         help="Pruning method to use (default: obs)")
-    parser.add_argument("--num-calibration-samples", type=int, default=2048,
-                        help="Number of samples for calibration (default: 2048)")
+    parser.add_argument("--num-calibration-samples", type=int, default=4,
+                        help="Number of samples for calibration (default: 4)")
     parser.add_argument("--num-evaluation-samples", type=int, default=100,
                         help="Number of samples for evaluation (default: 100)")
     parser.add_argument("--device", type=int, default=0,
@@ -44,18 +47,6 @@ def count_nonzero_params(model):
             nonzero_prunable += (module.weight != 0).sum().item()
             total_prunable += module.weight.numel()
     return nonzero_prunable, total_prunable
-
-
-def frange(start, stop, step):
-    if stop < start:
-        return [stop]
-    vals = []
-    v = start
-    while v <= stop:  
-        vals.append(round(v, 2))
-        v += step
-    return vals
-
 
 def evaluate_pruned_model(model, processor, num_samples=None, device=0, debug=False):
     """
@@ -180,171 +171,138 @@ def main():
     # Define sparsity levels to test
     sparsities = [float(s) for s in args.sparsities.split(",")]
     results = {}
+    pruned_model = None
     print(f"Evaluating {sparsities} sparsity levels with {args.method} method...")
     
-    # Start evaluation loop for non iterative methods
-    if args.method in ["obs", "obs_finetune", "mp_local", "mp_global", "mp_finetune_local", "mp_finetune_global"]:
-        for sparsity in sparsities:
-            print("=" * 60)
-            print(f"{f'Sparsity: {sparsity:.1%}':^60}")
-            
-            # Prune model
-            if sparsity == 0.0:
-                pruned_model = copy.deepcopy(model)
-            else:
-                if args.method == "obs":
-                    pruned_model = utility_obs_prune(
-                        model=model,
-                        processor=processor,
-                        sparsity=sparsity,
-                        input_features=input_features,
-                        device=args.device,
-                        debug=args.debug
-                    )
-                elif args.method == "obs_finetune":
-                    pruned_model = utility_iobs_prune(
-                        model=model,
-                        processor=processor,
-                        sparsities=[sparsity],
-                        input_features=input_features,
-                        device=args.device,
-                        debug=args.debug
-                    )
-                elif args.method == "mp_local":
-                    pruned_model = utility_mp_prune(
-                        model=model,
-                        processor=processor,
-                        sparsity=sparsity,
-                        prune_method="local",
-                        device=args.device,
-                        debug=args.debug
-                    )
-                elif args.method == "mp_global":
-                    pruned_model = utility_mp_prune(
-                        model=model,
-                        processor=processor,
-                        sparsity=sparsity,
-                        prune_method="global",
-                        device=args.device,
-                        debug=args.debug
-                    )
-                elif args.method == "mp_finetune_local":
-                    pruned_model = utility_imp_prune(
-                        model=model,
-                        processor=processor,
-                        sparsities=[sparsity],
-                        prune_method="local",
-                        device=args.device,
-                        debug=args.debug,
-                    )
-                elif args.method == "mp_finetune_global":
-                    pruned_model = utility_imp_prune(
-                        model=model,
-                        processor=processor,
-                        sparsities=[sparsity],
-                        prune_method="global",
-                        device=args.device,
-                        debug=args.debug
-                    )
+    # Start evaluation loop
+    for sparsity in sparsities:
+        print("=" * 60)
+        print(f"{f'Sparsity: {sparsity:.1%}':^60}")
+        start_time = time.time()
 
-            # Evaluate pruned model
-            metrics = evaluate_pruned_model(
-                model=pruned_model,
-                processor=processor,
-                num_samples=args.num_evaluation_samples,
-                device=args.device,
-                debug=args.debug,
-            )
+        # Prune model
+        if sparsity == 0.0:
+            pruned_model = copy.deepcopy(model)
+        else:
+            if args.method == "obs":
+                pruned_model = utility_obs_prune(
+                    model=model,
+                    processor=processor,
+                    sparsity=sparsity,
+                    input_features=input_features,
+                    device=args.device,
+                    debug=args.debug
+                )
+            elif args.method == "mp_local":
+                pruned_model = utility_mp_prune(
+                    model=model,
+                    processor=processor,
+                    sparsity=sparsity,
+                    prune_method="local",
+                    device=args.device,
+                    debug=args.debug
+                )
+            elif args.method == "mp_global":
+                pruned_model = utility_mp_prune(
+                    model=model,
+                    processor=processor,
+                    sparsity=sparsity,
+                    prune_method="global",
+                    device=args.device,
+                    debug=args.debug
+                )
+            elif args.method == "obs_finetune":
+                pruned_model = utility_iobs_prune(
+                    model=model,
+                    processor=processor,
+                    input_features=input_features,
+                    sparsities=[sparsity],
+                    device=args.device,
+                    debug=args.debug
+                )
+            elif args.method == "mp_finetune_local":
+                pruned_model = utility_imp_prune(
+                    model=model,
+                    processor=processor,
+                    sparsities=[sparsity],
+                    prune_method="local",
+                    device=args.device,
+                    debug=args.debug,
+                )
+            elif args.method == "mp_finetune_global":
+                pruned_model = utility_imp_prune(
+                    model=model,
+                    processor=processor,
+                    sparsities=[sparsity],
+                    prune_method="global",
+                    device=args.device,
+                    debug=args.debug
+                )
+            elif args.method == "iobs":
+                prev_model = copy.deepcopy(pruned_model)
+                pruned_model = utility_iobs_prune(
+                    model=prev_model,
+                    processor=processor,
+                    input_features=input_features,
+                    sparsities=[sparsity],
+                    device=args.device,
+                    debug=args.debug
+                )
+                del prev_model
+                torch.cuda.empty_cache()
+            elif args.method == "imp_local":
+                prev_model = copy.deepcopy(pruned_model)
+                pruned_model = utility_imp_prune(
+                    model=prev_model,
+                    processor=processor,
+                    sparsities=[sparsity],
+                    prune_method="local",
+                    device=args.device,
+                    debug=args.debug,
+                )
+                del prev_model
+                torch.cuda.empty_cache()
+            elif args.method == "imp_global":
+                prev_model = copy.deepcopy(pruned_model)
+                pruned_model = utility_imp_prune(
+                    model=prev_model,
+                    processor=processor,
+                    sparsities=[sparsity],
+                    prune_method="global",
+                    device=args.device,
+                    debug=args.debug
+                )
+                del prev_model
+                torch.cuda.empty_cache()
 
-            # Actual sparsity
-            pruned_nonzero, total_params = count_nonzero_params(pruned_model)
-            actual_sparsity = 1 - (pruned_nonzero / total_params) if total_params > 0 else 0
-            metrics['actual_sparsity'] = actual_sparsity
+        # Evaluate pruned model
+        metrics = evaluate_pruned_model(
+            model=pruned_model,
+            processor=processor,
+            num_samples=args.num_evaluation_samples,
+            device=args.device,
+            debug=args.debug,
+        )
 
-            # Clean up GPU memory
-            del pruned_model
-            torch.cuda.empty_cache()
-            
-            # Store results
-            results[sparsity] = metrics
+        # Actual sparsity
+        pruned_nonzero, total_params = count_nonzero_params(pruned_model)
+        actual_sparsity = 1 - (pruned_nonzero / total_params) if total_params > 0 else 0
+        metrics['actual_sparsity'] = actual_sparsity
 
-            print(f"{'-'*60}")
-            print(f"{'Actual sparsity:':<30} {actual_sparsity:.2%}")
-            print(f"{'WER:':<30} {metrics['wer']:.2f}%")
-            print(f"{'CER:':<30} {metrics['cer']:.2f}%")
-            print(f"{'Normalized WER:':<30} {metrics['normalized_wer']:.2f}%")
-            print(f"{'Normalized CER:':<30} {metrics['normalized_cer']:.2f}%")
-
-    elif args.method in ["iobs", "imp_local", "imp_global"]:
+        # Calculate time taken
+        time_taken = time.time() - start_time
+        metrics['time_taken'] = time_taken
         
+        # Store results
+        results[sparsity] = metrics
 
-
-
-
-
-
-        for sparsity in sparsities:
-            print("=" * 60)
-            print(f"{f'Sparsity: {sparsity:.1%}':^60}")
-            
-            # Prune model
-            if sparsity == 0.0:
-                pruned_model = copy.deepcopy(model)
-            else:
-                if args.method == "iobs":
-                    pruned_model = utility_iobs_prune(
-                        model=model,
-                        processor=processor,
-                        sparsity=sparsity,
-                        input_features=input_features,
-                        device=args.device,
-                        debug=args.debug
-                    )
-                elif args.method == "imp_local":
-                    pruned_model = utility_imp_prune(
-                        model=model,
-                        processor=processor,
-                        sparsities=frange(0.3, sparsity, 0.05),
-                        prune_method="local",
-                        device=args.device,
-                        debug=args.debug,
-                    )
-                elif args.method == "imp_global":
-                    pruned_model = utility_imp_prune(
-                        model=model,
-                        processor=processor,
-                        sparsities=frange(0.3, sparsity, 0.05),
-                        prune_method="global",
-                        device=args.device,
-                        debug=args.debug
-                    )
-
-            metrics = evaluate_pruned_model(
-                model=pruned_model,
-                processor=processor,
-                num_samples=args.num_evaluation_samples,
-                device=args.device,
-                debug=args.debug,
-            )
-
-            # Actual sparsity
-            pruned_nonzero, total_params = count_nonzero_params(pruned_model)
-            actual_sparsity = 1 - (pruned_nonzero / total_params) if total_params > 0 else 0
-            metrics['actual_sparsity'] = actual_sparsity
-
-            # Clean up GPU memory
-            del pruned_model
-            torch.cuda.empty_cache()
-            
-            # Store results
-            results[sparsity] = metrics
-
-            print(f"{'-'*60}")
-            print(f"{'Actual sparsity:':<30} {actual_sparsity:.2%}")
-            print(f"{'WER:':<30} {metrics['wer']:.2f}%")
-            print(f"{'CER:':<30} {metrics['cer']:.2f}%")
-            print(f"{'Normalized WER:':<30} {metrics['normalized_wer']:.2f}%")
-            print(f"{'Normalized CER:':<30} {metrics['normalized_cer']:.2f}%")
+        print(f"{'-'*60}")
+        print(f"{'Actual sparsity:':<30} {actual_sparsity:.2%}")
+        print(f"{'Time taken:':<30} {time_taken:.2f} seconds")
+        print(f"{'WER:':<30} {metrics['wer']:.2f}%")
+        print(f"{'CER:':<30} {metrics['cer']:.2f}%")
+        print(f"{'Normalized WER:':<30} {metrics['normalized_wer']:.2f}%")
+        print(f"{'Normalized CER:':<30} {metrics['normalized_cer']:.2f}%")
 
     # Save results to JSON
     output_file = args.output
@@ -359,11 +317,11 @@ def main():
     print("=" * 60)
     print("SUMMARY")
     print("=" * 60)
-    print(f"{'Sparsity':<10} {'WER':<8} {'CER':<8} {'Norm WER':<10} {'Norm CER':<10} {'Actual Sparsity':<10}")
+    print(f"{'Sparsity':<10} {'WER':<8} {'CER':<8} {'Norm WER':<10} {'Norm CER':<10} {'Actual Sparsity':<10} {'Time Taken':<10}")
     print("-" * 60)
     
     for sparsity, metrics in results.items():
-        print(f"{sparsity:<10.1%} {metrics['wer']:<8.2f} {metrics['cer']:<8.2f} {metrics['normalized_wer']:<10.2f} {metrics['normalized_cer']:<10.2f} {metrics['actual_sparsity']:<10.2%}")
+        print(f"{sparsity:<10.1%} {metrics['wer']:<8.2f} {metrics['cer']:<8.2f} {metrics['normalized_wer']:<10.2f} {metrics['normalized_cer']:<10.2f} {metrics['actual_sparsity']:<10.2%} {metrics['time_taken']:<10.2f}")
 
 if __name__ == "__main__":
     main()

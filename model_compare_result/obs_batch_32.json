@@ -1,0 +1,149 @@
+{
+  "0.0": {
+    "wer": 101.1363636364,
+    "cer": 83.7879887978,
+    "normalized_wer": 12.654155496,
+    "normalized_cer": 5.4351208381,
+    "actual_sparsity": 1.0705100502717002e-06
+  },
+  "0.05": {
+    "wer": 101.1363636364,
+    "cer": 83.7464993258,
+    "normalized_wer": 12.7613941019,
+    "normalized_cer": 5.4143761021,
+    "actual_sparsity": 0.03457802360348394
+  },
+  "0.1": {
+    "wer": 101.0281385281,
+    "cer": 83.8813401099,
+    "normalized_wer": 12.5469168901,
+    "normalized_cer": 5.352141894,
+    "actual_sparsity": 0.08433124084302168
+  },
+  "0.15": {
+    "wer": 101.3528138528,
+    "cer": 83.8087335339,
+    "normalized_wer": 12.7077747989,
+    "normalized_cer": 5.3002800539,
+    "actual_sparsity": 0.13406337726926176
+  },
+  "0.2": {
+    "wer": 101.2987012987,
+    "cer": 83.922829582,
+    "normalized_wer": 13.0294906166,
+    "normalized_cer": 5.6425681983,
+    "actual_sparsity": 0.18372173084895949
+  },
+  "0.25": {
+    "wer": 100.8658008658,
+    "cer": 83.7776164298,
+    "normalized_wer": 12.8150134048,
+    "normalized_cer": 5.6425681983,
+    "actual_sparsity": 0.23345386727519946
+  },
+  "0.3": {
+    "wer": 101.5692640693,
+    "cer": 83.8191059019,
+    "normalized_wer": 13.9946380697,
+    "normalized_cer": 5.6736853024,
+    "actual_sparsity": 0.28460964482343065
+  },
+  "0.35": {
+    "wer": 101.0822510823,
+    "cer": 83.7879887978,
+    "normalized_wer": 14.5308310992,
+    "normalized_cer": 6.3582615911,
+    "actual_sparsity": 0.3342785388097773
+  },
+  "0.4": {
+    "wer": 102.1645021645,
+    "cer": 84.5244269267,
+    "normalized_wer": 17.0509383378,
+    "normalized_cer": 6.7316668395,
+    "actual_sparsity": 0.38406337726926176
+  },
+  "0.45": {
+    "wer": 102.0021645022,
+    "cer": 84.7733637589,
+    "normalized_wer": 21.8230563003,
+    "normalized_cer": 9.5425785707,
+    "actual_sparsity": 0.4337533520689062
+  },
+  "0.5": {
+    "wer": 123.4848484848,
+    "cer": 101.1098433772,
+    "normalized_wer": 60.4289544236,
+    "normalized_cer": 35.8157867441,
+    "actual_sparsity": 0.48345386727519946
+  },
+  "0.55": {
+    "wer": 154.1125541126,
+    "cer": 125.7027279328,
+    "normalized_wer": 137.6943699732,
+    "normalized_cer": 96.3696711959,
+    "actual_sparsity": 0.5346096448234305
+  },
+  "0.6": {
+    "wer": 125.7575757576,
+    "cer": 99.0353697749,
+    "normalized_wer": 115.8713136729,
+    "normalized_cer": 95.2598278187,
+    "actual_sparsity": 0.5842996196230751
+  },
+  "0.65": {
+    "wer": 100.0,
+    "cer": 100.0,
+    "normalized_wer": 100.0,
+    "normalized_cer": 100.0,
+    "actual_sparsity": 0.6340633772692617
+  },
+  "0.7": {
+    "wer": 100.1623376623,
+    "cer": 99.7406907997,
+    "normalized_wer": 100.1608579088,
+    "normalized_cer": 99.4295197594,
+    "actual_sparsity": 0.6836901096290129
+  },
+  "0.75": {
+    "wer": 177.7597402597,
+    "cer": 146.0325692356,
+    "normalized_wer": 171.581769437,
+    "normalized_cer": 134.4777512706,
+    "actual_sparsity": 0.7334538672751995
+  },
+  "0.8": {
+    "wer": 519.4805194805,
+    "cer": 379.1307955606,
+    "normalized_wer": 507.5603217158,
+    "normalized_cer": 355.8137122705,
+    "actual_sparsity": 0.7846096448234307
+  },
+  "0.85": {
+    "wer": 519.4805194805,
+    "cer": 379.1307955606,
+    "normalized_wer": 514.4235924933,
+    "normalized_cer": 368.8725235971,
+    "actual_sparsity": 0.8342996196230751
+  },
+  "0.9": {
+    "wer": 519.4805194805,
+    "cer": 471.9116274245,
+    "normalized_wer": 514.745308311,
+    "normalized_cer": 456.9857898558,
+    "actual_sparsity": 0.8840633772692618
+  },
+  "0.95": {
+    "wer": 100.0,
+    "cer": 99.097603983,
+    "normalized_wer": 100.0,
+    "normalized_cer": 99.097603983,
+    "actual_sparsity": 0.9336584884090662
+  },
+  "1.0": {
+    "wer": 100.0,
+    "cer": 100.0,
+    "normalized_wer": 100.0,
+    "normalized_cer": 93.6002489368,
+    "actual_sparsity": 0.9797331037281418
+  }
+}
