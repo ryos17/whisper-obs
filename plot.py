@@ -4,15 +4,15 @@ import os
 
 # Define file paths and corresponding model names and colors
 
-# model_files = {
-#     'model_compare_result/tiny_obs_new.json': {'name': 'whisper-tiny', 'color': 'blue', 'marker': 'o'},
-#     'model_compare_result/base_obs_new.json': {'name': 'whisper-base', 'color': 'green', 'marker': 's'},
-#     'model_compare_result/small_obs_new.json': {'name': 'whisper-small', 'color': 'red', 'marker': '^'},
-#     'model_compare_result/medium_obs_new.json': {'name': 'whisper-medium', 'color': 'purple', 'marker': 'd'},
-#     'model_compare_result/large_obs_new.json': {'name': 'whisper-large', 'color': 'orange', 'marker': 'x'}
-# }
-# title = 'Whisper Model Size Comparison with OBS Pruning'
-# file_name = 'model_compare_result/model_size_comparison.png'
+model_files = {
+    'model_compare_result/tiny_obs_new.json': {'name': 'whisper-tiny', 'color': 'blue', 'marker': 'o'},
+    'model_compare_result/base_obs_new.json': {'name': 'whisper-base', 'color': 'green', 'marker': 's'},
+    'model_compare_result/small_obs_new.json': {'name': 'whisper-small', 'color': 'red', 'marker': '^'},
+    'model_compare_result/medium_obs_new.json': {'name': 'whisper-medium', 'color': 'purple', 'marker': 'd'},
+    'model_compare_result/large_obs_new.json': {'name': 'whisper-large', 'color': 'orange', 'marker': 'x'}
+}
+title = 'Whisper Model Size Comparison with OBS Pruning'
+file_name = 'model_compare_result/model_size_comparison.png'
 
 # model_files = {
 #     'model_compare_result/tiny_obs_new.json': {'name': 'obs', 'color': 'blue', 'marker': 'o'},
@@ -29,15 +29,29 @@ import os
 # file_name = 'model_compare_result/pruning_method_comparison.png'
 
 model_files = {
-    'model_compare_result/obs_batch_1.json': {'name': 'obs-batch-1', 'color': 'blue', 'marker': 'o'},
-    'model_compare_result/obs_batch_4.json': {'name': 'obs-batch-4', 'color': 'green', 'marker': 's'},
-    'model_compare_result/obs_batch_16.json': {'name': 'obs-batch-16', 'color': 'purple', 'marker': 'd'},
-    'model_compare_result/obs_batch_32.json': {'name': 'obs-batch-32', 'color': 'darkgreen', 'marker': 'h'},
-    'model_compare_result/obs_batch_64.json': {'name': 'obs-batch-64', 'color': 'orange', 'marker': 'x'},
-    'model_compare_result/obs_batch_128.json': {'name': 'obs-batch-128', 'color': 'red', 'marker': '^'},
+    'model_compare_result/test_obs.json': {'name': 'obs', 'color': 'blue', 'marker': 'o'},
+    'model_compare_result/test_mp_global.json': {'name': 'mp-global', 'color': 'red', 'marker': '^'},
+    'model_compare_result/test_mp_local.json': {'name': 'mp-local', 'color': 'purple', 'marker': 'd'},
+    'model_compare_result/test_obs_finetune.json': {'name': 'obs-finetune', 'color': 'green', 'marker': 's'},
+    'model_compare_result/test_mp_finetune_global.json': {'name': 'mp-finetune-global', 'color': 'orange', 'marker': 'x'},
+    'model_compare_result/test_mp_finetune_local.json': {'name': 'mp-finetune-local', 'color': 'gray', 'marker': 'v'},
+    'model_compare_result/test_iobs.json': {'name': 'iobs', 'color': 'black', 'marker': 'h'},
+    'model_compare_result/test_imp_global.json': {'name': 'imp-global', 'color': 'pink', 'marker': 's'},
+    'model_compare_result/test_imp_local.json': {'name': 'imp-local', 'color': 'darkgreen', 'marker': 'd'},
 }
-title = 'Whisper Tiny Model Comparison with Different Batch Sizes'
-file_name = 'model_compare_result/batch_size_comparison.png'
+title = 'Whisper Tiny Model Comparison with Different Pruning Methods'
+file_name = 'model_compare_result/test_pruning_method_comparison.png'
+
+# model_files = {
+#     'model_compare_result/obs_batch_1.json': {'name': 'obs-batch-1', 'color': 'blue', 'marker': 'o'},
+#     'model_compare_result/obs_batch_4.json': {'name': 'obs-batch-4', 'color': 'green', 'marker': 's'},
+#     'model_compare_result/obs_batch_16.json': {'name': 'obs-batch-16', 'color': 'purple', 'marker': 'd'},
+#     'model_compare_result/obs_batch_32.json': {'name': 'obs-batch-32', 'color': 'darkgreen', 'marker': 'h'},
+#     'model_compare_result/obs_batch_64.json': {'name': 'obs-batch-64', 'color': 'orange', 'marker': 'x'},
+#     'model_compare_result/obs_batch_128.json': {'name': 'obs-batch-128', 'color': 'red', 'marker': '^'},
+# }
+# title = 'Whisper Tiny Model Comparison with Different Batch Sizes'
+# file_name = 'model_compare_result/batch_size_comparison.png'
 
 # Create plot
 plt.figure(figsize=(12, 8))
@@ -60,12 +74,10 @@ for file_path, model_info in model_files.items():
         
         for sparsity_str, metrics in results.items():
             sparsity = float(sparsity_str) * 100  # Convert to percentage
-            # Only include sparsity values that are multiples of 10%
-            if sparsity % 10 == 0:
-                norm_wer = min(metrics['normalized_wer'], 100)  # Cap at 100
-                
-                sparsities.append(sparsity)
-                normalized_wers.append(norm_wer)
+            norm_wer = min(metrics['normalized_wer'], 100)  # Cap at 100
+            
+            sparsities.append(sparsity)
+            normalized_wers.append(norm_wer)
         
         # Sort by sparsity to ensure the line is drawn correctly
         sorted_data = sorted(zip(sparsities, normalized_wers))
